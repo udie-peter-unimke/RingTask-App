@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# 📱 APP METADATA
+# ---------------------------------------------------------------------------
+name: ringtask
+description: A virtual call reminder app that reads your tasks aloud.
+publish_to: 'none'
+version: 1.0.0+1
+
+# ---------------------------------------------------------------------------
+# 🧠 SDK CONSTRAINTS
+# ---------------------------------------------------------------------------
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+# ---------------------------------------------------------------------------
+# 📦 DEPENDENCIES
+# ---------------------------------------------------------------------------
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # -------------------------------
+  # 🔥 FIREBASE
+  # -------------------------------
+  firebase_core: ^4.2.1
+  firebase_auth: ^6.1.2
+  cloud_firestore: ^6.1.0
+  google_sign_in: ^7.2.0
+  flutter_slidable: ^4.0.3
+
+  # -------------------------------
+  # 🧠 STATE MANAGEMENT & NAV
+  # -------------------------------
+  flutter_bloc: ^9.1.1
+  equatable: ^2.0.7
+  go_router: ^17.0.0
+  get_it: ^9.1.0
+  file_picker: ^8.1.2
+
+  # -------------------------------
+  # 🔔 FAKE CALL / BACKGROUND
+  # -------------------------------
+  flutter_local_notifications: ^21.0.0
+
+  wakelock_plus: ^1.4.0
+  vibration: ^3.1.4
+  audioplayers: ^6.0.0
+
+  # -------------------------------
+  # 🗣️ VOICE & SPEECH
+  # -------------------------------
+  flutter_tts: ^4.2.3
+  speech_to_text: ^7.3.0
+  permission_handler: ^12.0.1
+
+  # -------------------------------
+  # 🧰 UTILITIES
+  # -------------------------------
+  uuid: ^4.5.2
+  shared_preferences: ^2.5.3
+  path_provider: ^2.1.5
+  timezone: ^0.11.0
+  device_info_plus: 12.4.0
+  android_intent_plus: ^6.0.0
+  google_fonts: ^8.0.1
+  intl: ^0.20.2
+  flutter_launcher_icons: ^0.14.4
+
+# ---------------------------------------------------------------------------
+# 🧪 DEV DEPENDENCIES (NO BUILD RUNNER)
+# ---------------------------------------------------------------------------
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# ---------------------------------------------------------------------------
+# 🖼️ ASSETS
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 🖼️ ASSETS
+# ---------------------------------------------------------------------------
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/sounds/ringtone.mp3
+    - assets/images/google_logo.png
+    - assets/images/rt_final_icon.png
+
+# Move this all the way to the left!
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/rt_final_icon.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/rt_final_icon.png"
+  min_sdk_android: 21

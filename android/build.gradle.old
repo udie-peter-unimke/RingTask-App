@@ -1,0 +1,34 @@
+rootProject.layout.buildDirectory = layout.buildDirectory.dir("../build")
+
+subprojects {
+    project.layout.buildDirectory = layout.buildDirectory.dir("${rootProject.layout.buildDirectory.get()}/${project.name}")
+}
+
+subprojects {
+    project.plugins.withId("com.android.library") {
+        android {
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+    }
+    project.plugins.withId("com.android.application") {
+        android {
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+        }
+    }
+
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.layout.buildDirectory
+}
