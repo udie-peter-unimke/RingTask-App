@@ -19,8 +19,26 @@ abstract class AuthRemoteDataSource {
 class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
   final FirebaseAuth _auth;
   final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
+  bool _isGoogleInitialized = false;
 
-  AuthRemoteDataSourceImpl(this._auth);
+  AuthRemoteDataSourceImpl(this._auth) {
+    // Kick off initialization immediately so it's ready when the user clicks sign-in.
+    _ensureGoogleInitialized();
+  }
+
+  Future<void> _ensureGoogleInitialized() async {
+    if (!_isGoogleInitialized) {
+      try {
+        await _googleSignIn.initialize(
+          serverClientId: '909170843494-ls8vio52f9nm4r26rc01uor70c1gersc.apps.googleusercontent.com',
+        );
+        _isGoogleInitialized = true;
+        AppLogger.info('Google Sign-In initialized');
+      } catch (e) {
+        AppLogger.error('Google Sign-In initialization failed: $e');
+      }
+    }
+  }
 
   /// -------------------------------
   /// Email & Password Authentication
@@ -63,10 +81,7 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
     try {
       AppLogger.info('Starting Google Sign-In...');
 
-// Initialize the GoogleSignIn singleton with your client ID
-      await _googleSignIn.initialize(
-        serverClientId: '909170843494-ls8vio52f9nm4r26rc01uor70c1gersc.apps.googleusercontent.com',
-      );
+      await _ensureGoogleInitialized();
 
 // Start interactive authentication (non-nullable)
       final GoogleSignInAccount googleUser = await _googleSignIn.authenticate();

@@ -7,8 +7,11 @@ import 'package:ringtask/data/models/user_model.dart';
 import 'package:ringtask/utils/logger.dart';
 
 class FirebaseAuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseAuth _auth;
  // final FirestoreService _firestoreService = FirestoreService();
+
+  FirebaseAuthService({FirebaseAuth? firebaseAuth})
+      : _auth = firebaseAuth ?? FirebaseAuth.instance;
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
   User? get currentUser => _auth.currentUser;

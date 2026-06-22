@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.ringtask"
+    namespace = "com.apexyron.ringtask"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.ringtask"
+        applicationId = "com.apexyron.ringtask"
         minSdk = 24
         targetSdk = 35
         versionCode = 1
@@ -30,15 +30,23 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "11"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
     buildFeatures {
         compose = true
+        viewBinding = true
     }
+    dependenciesInfo {
+        includeInApk = true
+        includeInBundle = true
+    }
+    ndkVersion = "28.2.13676358"
 }
 
 dependencies {
@@ -61,4 +69,3 @@ dependencies {
    implementation(platform("com.google.firebase:firebase-bom:34.6.0"))
     implementation("com.google.firebase:firebase-analytics")
 }
-

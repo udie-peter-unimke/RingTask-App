@@ -1,9 +1,9 @@
 // lib/repositories/fake_call_repository.dart
 import 'package:ringtask/core/di/service_locator.dart';
 import 'package:ringtask/data/models/task_model.dart';
+import 'package:ringtask/data/models/settings_model.dart';
 import 'package:ringtask/services/firebase/fake_call_service.dart';
 import 'package:ringtask/utils/logger.dart';
-// ✅ REMOVED: import 'package:workmanager/workmanager.dart';
 
 class FakeCallRepository {
   final FakeCallService _service;
@@ -11,7 +11,7 @@ class FakeCallRepository {
   FakeCallRepository({FakeCallService? service})
       : _service = service ?? getIt<FakeCallService>();
 
-  Future<bool> initiateFakeCall(TaskModel task) async {
+  Future<bool> initiateFakeCall(TaskModel task, {String? ringtonePath}) async {
     try {
       AppLogger.info('Initiating fake call for: ${task.title}');
 
@@ -19,13 +19,12 @@ class FakeCallRepository {
         'title': task.title,
         'description': task.description,
         'callerName': 'Ringtask Reminder',
-        'ringtonePath': 'assets/sounds/ringtone.mp3',
+        'ringtonePath': ringtonePath,
       };
 
+      // showFakeCall navigates to FakeCallScreen — TTS is handled separately
+      // in readTaskDetails() after the user answers, not here
       await _service.showFakeCall(payload);
-      await Future.delayed(const Duration(milliseconds: 1500));
-      await _service.speakText(_formatTaskForSpeech(task));
-
       return true;
     } catch (e, s) {
       AppLogger.error('initiateFakeCall failed: $e\n$s');
@@ -53,7 +52,10 @@ class FakeCallRepository {
     }
   }
 
-  Future<bool> scheduleTaskReminder(TaskModel task) async {
+  Future<bool> scheduleTaskReminder(
+      TaskModel task, {
+        SettingsModel? settings,
+      }) async {
     try {
       if (task.scheduledTime == null) {
         AppLogger.warning('No scheduledTime → cannot schedule');
@@ -61,9 +63,11 @@ class FakeCallRepository {
       }
 
       final scheduled = task.scheduledTime!;
+      final ringtonePath = settings?.fakeCallRingtone;
+      final callerName = settings?.defaultCallerName ?? 'RingTask';
 
       if (scheduled.isBefore(DateTime.now())) {
-        return await initiateFakeCall(task);
+        return await initiateFakeCall(task, ringtonePath: ringtonePath);
       }
 
       await _service.scheduleFakeCall(
@@ -71,7 +75,8 @@ class FakeCallRepository {
         title: task.title,
         description: task.description,
         scheduledTime: scheduled,
-        callerName: 'RingTask',
+        callerName: callerName,
+        ringtonePath: ringtonePath,
       );
 
       AppLogger.info('Scheduled fake call at $scheduled');
@@ -84,7 +89,6 @@ class FakeCallRepository {
 
   Future<bool> cancelScheduledReminder(String taskId) async {
     try {
-      // ✅ Delegate to FakeCallService which uses the MethodChannel
       await _service.cancelTask(taskId);
       return true;
     } catch (e) {
@@ -95,6 +99,28 @@ class FakeCallRepository {
 
   Future<void> cancelAllReminders() async {
     await _service.cancelAll();
+  }
+
+  Future<void> snoozeFakeCall({
+    required TaskModel task,
+    required DateTime until,
+    SettingsModel? settings, // ← added to preserve ringtone on reschedule
+  }) async {
+    try {
+      await endFakeCall();
+
+      final snoozedTask = task.copyWith(scheduledTime: until);
+
+      // Pass settings through so rescheduled alarm keeps the same ringtone
+      final success = await scheduleTaskReminder(snoozedTask, settings: settings);
+
+      if (!success) throw Exception('Failed to reschedule task');
+
+      AppLogger.info('Fake call snoozed until $until');
+    } catch (e, s) {
+      AppLogger.error('snoozeFakeCall failed: $e\n$s');
+      throw Exception('Failed to snooze fake call: $e');
+    }
   }
 
   String _formatTaskForSpeech(TaskModel task) {

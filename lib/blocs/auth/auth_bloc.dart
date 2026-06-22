@@ -1,12 +1,15 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ringtask/repositories/auth_repository.dart';
+import 'package:ringtask/core/di/service_locator.dart'; // Required for getIt
+import 'package:ringtask/data/datasources/local/cache_manager.dart'; // Required for cache check
+import 'package:ringtask/utils/logger.dart';
 import 'auth_event.dart';
 import 'auth_state.dart';
 
 class AuthBloc extends Bloc<AuthEvent, AuthState> {
-  final AuthRepository authRepository;
+  final IAuthRepository authRepository;
 
-  AuthBloc({required this.authRepository}) : super(AuthInitial()) {
+  AuthBloc({required this.authRepository}) : super(AuthLoading()) {
     on<AppStarted>(_onAppStarted);
     on<SignUpRequested>(_onSignUpRequested);
     on<LoginRequested>(_onLoginRequested);
@@ -23,11 +26,26 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       Emitter<AuthState> emit,
       ) async {
     try {
+      AppLogger.info('AuthBloc: Initializing app startup check...');
+      // 1. Intercept startup to check onboarding completion status first
+      final cacheManager = getIt<CacheManager>();
+      final hasSeenOnboarding = await cacheManager.hasSeenOnboarding();
+      AppLogger.info('AuthBloc: Onboarding seen status: $hasSeenOnboarding');
+
+      if (!hasSeenOnboarding) {
+        AppLogger.info('AuthBloc: Emitting AuthOnboardingRequired');
+        emit(AuthOnboardingRequired());
+        return; // Stop execution here so user gets guided to OnboardingScreen
+      }
+
+      // 2. Existing authentication verification logic continues untouched
       final isLoggedIn = await authRepository.isUserLoggedIn();
+      AppLogger.info('AuthBloc: User logged in: $isLoggedIn');
 
       if (isLoggedIn) {
         final user = await authRepository.getCurrentUser();
         if (user != null) {
+          AppLogger.info('AuthBloc: Emitting AuthSuccess for ${user.id}');
           emit(AuthSuccess(
             uid: user.id,
             name: user.displayName,
@@ -36,8 +54,11 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
           return;
         }
       }
+      AppLogger.info('AuthBloc: Emitting AuthInitial (Login required)');
       emit(AuthInitial());
-    } catch (_) {
+    } catch (e, stack) {
+      AppLogger.error('AuthBloc: Startup check failed', error: e, stackTrace: stack);
+      // Graceful fallback to initial screen state if cache or repository fails
       emit(AuthInitial());
     }
   }

@@ -7,11 +7,13 @@ class TaskCard extends StatelessWidget {
   final TaskModel task;
   final VoidCallback onToggle;
   final VoidCallback onDelete;
+  final bool use24HourFormat;
 
   const TaskCard({
     required this.task,
     required this.onToggle,
     required this.onDelete,
+    this.use24HourFormat = true,
     super.key,
   });
 
@@ -20,7 +22,8 @@ class TaskCard extends StatelessWidget {
   }
 
   String get formattedTime {
-    return task.displayScheduledTime; // 🔥 Use TaskModel's perfect formatting
+    return task.displayScheduledTimeFormatted(
+        use24HourFormat: use24HourFormat); // 🔥 Use TaskModel's perfect formatting
   }
 
   String get timeUntil {
@@ -70,14 +73,14 @@ class TaskCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(12),
           border: task.isUrgent
               ? Border.all(color: Colors.blueGrey, width: 2)
               : null,
           boxShadow: [
             BoxShadow(
-              color: Colors.grey.withValues(alpha: 0.1), // 🔥 Fixed opacity
+              color: Colors.black.withValues(alpha: 0.05), // 🔥 Fixed opacity
               blurRadius: 8,
               offset: const Offset(0, 2),
             ),

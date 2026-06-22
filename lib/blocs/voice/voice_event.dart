@@ -61,3 +61,8 @@ class RequestVoicePermissionEvent extends VoiceEvent {
 class ResetVoiceEvent extends VoiceEvent {
   const ResetVoiceEvent();
 }
+
+/// Event to open app settings for permissions
+class OpenVoiceSettingsEvent extends VoiceEvent {
+  const OpenVoiceSettingsEvent();
+}

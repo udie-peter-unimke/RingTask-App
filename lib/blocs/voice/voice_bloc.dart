@@ -1,4 +1,5 @@
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:ringtask/repositories/voice_repository.dart';
 import 'package:ringtask/utils/logger.dart';
 
@@ -6,18 +7,19 @@ import 'voice_event.dart';
 import 'voice_state.dart';
 
 class VoiceBloc extends Bloc<VoiceEvent, VoiceState> {
-  final VoiceRepository voiceRepository;
+  final IVoiceRepository voiceRepository;
 
   VoiceBloc({required this.voiceRepository}) : super(const VoiceInitialState()) {
-    on<InitializeVoiceEvent>(_onInitializeVoice);
-    on<StartListeningEvent>(_onStartListening);
+    on<InitializeVoiceEvent>(_onInitializeVoice, transformer: droppable());
+    on<StartListeningEvent>(_onStartListening, transformer: droppable());
     on<StopListeningEvent>(_onStopListening);
     on<CancelVoiceEvent>(_onCancelVoice);
     on<VoiceRecognizedEvent>(_onVoiceRecognized);
     on<VoiceErrorEvent>(_onVoiceError);
     on<CheckVoicePermissionEvent>(_onCheckVoicePermission);
-    on<RequestVoicePermissionEvent>(_onRequestVoicePermission);
+    on<RequestVoicePermissionEvent>(_onRequestVoicePermission, transformer: droppable());
     on<ResetVoiceEvent>(_onResetVoice);
+    on<OpenVoiceSettingsEvent>(_onOpenVoiceSettings);
   }
 
   /// Initialize voice recognition
@@ -40,7 +42,13 @@ class VoiceBloc extends Bloc<VoiceEvent, VoiceState> {
       if (permissionGranted) {
         emit(const VoiceReadyState());
       } else {
-        emit(const VoicePermissionDeniedState());
+        final isPermanentlyDenied = await voiceRepository.isMicrophonePermissionPermanentlyDenied();
+        emit(VoicePermissionDeniedState(
+          reason: isPermanentlyDenied 
+              ? 'Microphone permission is permanently denied. Please enable it in settings.' 
+              : 'Microphone permission is required to use voice input',
+          isPermanentlyDenied: isPermanentlyDenied,
+        ));
       }
     } catch (e) {
       AppLogger.error('Error initializing voice: $e');
@@ -54,14 +62,22 @@ class VoiceBloc extends Bloc<VoiceEvent, VoiceState> {
       Emitter<VoiceState> emit,
       ) async {
     try {
-      emit(const VoiceListeningState());
-
-      final permissionGranted = await voiceRepository.checkMicrophonePermission();
-
-      if (!permissionGranted) {
-        emit(const VoicePermissionDeniedState());
+      if (state is VoiceListeningState) {
+        AppLogger.info('VoiceBloc: Already listening, ignoring StartListeningEvent');
         return;
       }
+
+      // Proactively initialize if not ready
+      if (state is VoiceInitialState || state is VoiceErrorState) {
+        emit(const VoiceInitializingState());
+        final isAvailable = await voiceRepository.isVoiceAvailable();
+        if (!isAvailable) {
+          emit(const VoiceUnavailableState());
+          return;
+        }
+      }
+
+      emit(const VoiceListeningState());
 
       await voiceRepository.startListening(
         onResult: (recognizedText) {
@@ -182,8 +198,12 @@ class VoiceBloc extends Bloc<VoiceEvent, VoiceState> {
         emit(const VoicePermissionGrantedState());
         emit(const VoiceReadyState());
       } else {
-        emit(const VoicePermissionDeniedState(
-          reason: 'Microphone permission was denied. Please enable it in settings.',
+        final isPermanentlyDenied = await voiceRepository.isMicrophonePermissionPermanentlyDenied();
+        emit(VoicePermissionDeniedState(
+          reason: isPermanentlyDenied 
+              ? 'Microphone permission was permanently denied. Please enable it in settings.' 
+              : 'Microphone permission was denied. Please enable it to use voice input.',
+          isPermanentlyDenied: isPermanentlyDenied,
         ));
       }
     } catch (e) {
@@ -203,6 +223,18 @@ class VoiceBloc extends Bloc<VoiceEvent, VoiceState> {
     } catch (e) {
       AppLogger.error('Error resetting voice: $e');
       emit(VoiceErrorState(errorMessage: 'Failed to reset voice: $e'));
+    }
+  }
+
+  /// Open app settings
+  Future<void> _onOpenVoiceSettings(
+      OpenVoiceSettingsEvent event,
+      Emitter<VoiceState> emit,
+      ) async {
+    try {
+      await voiceRepository.openAppSettings();
+    } catch (e) {
+      AppLogger.error('Error opening settings: $e');
     }
   }
 

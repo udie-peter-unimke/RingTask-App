@@ -1,4 +1,4 @@
-package com.example.ringtask.ui.theme
+package com.apexyron.ringtask.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

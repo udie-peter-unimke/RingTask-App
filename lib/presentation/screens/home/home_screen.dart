@@ -7,11 +7,21 @@ import 'package:intl/intl.dart';
 import 'package:ringtask/blocs/task/task_bloc.dart';
 import 'package:ringtask/blocs/task/task_event.dart';
 import 'package:ringtask/blocs/task/task_state.dart';
+import 'package:ringtask/blocs/settings/settings_bloc.dart';
+import 'package:ringtask/blocs/settings/settings_state.dart';
+import 'package:ringtask/blocs/voice/voice_bloc.dart';
+import 'package:ringtask/blocs/voice/voice_event.dart';
+import 'package:ringtask/blocs/voice/voice_state.dart';
 import 'package:ringtask/data/models/task_model.dart';
+import 'package:ringtask/data/models/settings_model.dart';
+import 'package:ringtask/utils/task_parser.dart';
 import 'package:ringtask/presentation/widgets/task_card.dart';
-import 'package:ringtask/presentation/screens/voice_input/voice_input_screen.dart';
 import 'package:ringtask/presentation/screens/settings/settings_screen.dart';
+import 'package:ringtask/presentation/screens/loop/loop_screen.dart';
 import 'package:ringtask/presentation/widgets/add_task_dialog.dart';
+import 'package:ringtask/core/di/service_locator.dart';
+import 'package:ringtask/services/sync_service.dart';
+import 'package:table_calendar/table_calendar.dart';
 
 class TaskHomeScreen extends StatefulWidget {
   const TaskHomeScreen({super.key});
@@ -27,6 +37,9 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
   int _currentIndex = 0;
   String _selectedFilter = 'All Tasks';
   final TextEditingController _searchController = TextEditingController();
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  bool _isQuickVoiceActive = false;
 
   @override
   void initState() {
@@ -35,7 +48,16 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
       if (!mounted) return;
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
-        context.read<TaskBloc>().add(LoadTasks(user.uid));
+        // 🚀 Initialize SyncService
+        getIt<SyncService>().initialize(user.uid);
+
+        final settingsState = context.read<SettingsBloc>().state;
+        final settings = settingsState is SettingsLoaded
+            ? settingsState.settings
+            : settingsState is SettingsUpdateSuccess
+            ? settingsState.settings
+            : null;
+        context.read<TaskBloc>().add(LoadTasks(user.uid, settings: settings));
       }
     });
 
@@ -59,7 +81,7 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
   }
 
   List<TaskModel> _getFilteredTasks(List<TaskModel> tasks) {
-    var filtered = tasks;
+    var filtered = tasks.where((task) => !task.isDeletedLocally).toList();
     if (_selectedFilter == 'In Progress') {
       filtered = filtered.where((t) => !t.isCompleted).toList();
     }
@@ -102,193 +124,274 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
     final user = FirebaseAuth.instance.currentUser;
     final userName = user?.displayName?.split(' ').first ?? 'User';
 
-    return BlocConsumer<TaskBloc, TaskState>(
-      listener: (context, state) {
-        if (state is TaskAdded && mounted) {
-          _showSnackBar('✓ Task "${state.addedTask.title}" added!', Colors.green);
-        } else if (state is TaskUpdated && mounted) {
-          // ✅ ADDED: show snackbar when task is updated
-          _showSnackBar('✓ Task "${state.updatedTask.title}" updated!', Colors.blue);
-        } else if (state is TaskDeleted && mounted) {
-          _showSnackBar('Task deleted', Colors.red);
-        } else if (state is TaskError && mounted) {
-          _showSnackBar(state.message, Colors.orange);
-        }
-      },
-      builder: (context, state) {
-        // ✅ KEPT: full screen spinner only on initial load with no tasks yet
-        if (state is TaskLoading && state.tasks.isEmpty) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
+    return MultiBlocListener(
+      listeners: [
+        BlocListener<VoiceBloc, VoiceState>(
+          listener: _onVoiceStateChanged,
+        ),
+        BlocListener<TaskBloc, TaskState>(
+          listener: (context, state) {
+            if (state is TaskAdded && mounted) {
+              final isSynced = state.addedTask.isSynced;
+              _showSnackBar(
+                  '✓ Task "${state.addedTask.title}" ${isSynced ? "synced" : "saved locally"}',
+                  isSynced ? Colors.green : Colors.orange);
+            } else if (state is TaskUpdated && mounted) {
+              _showSnackBar(
+                  '✓ Task "${state.updatedTask.title}" updated!', Colors.blue);
+            } else if (state is TaskDeleted && mounted) {
+              _showSnackBar('Task deleted', Colors.red);
+            } else if (state is TaskError && mounted) {
+              _showSnackBar(state.message, Colors.orange);
+            }
+          },
+        ),
+      ],
+      child: BlocBuilder<TaskBloc, TaskState>(
+        builder: (context, state) {
+          final settingsState = context.watch<SettingsBloc>().state;
+          final settings = settingsState is SettingsLoaded
+              ? settingsState.settings
+              : settingsState is SettingsUpdateSuccess
+              ? settingsState.settings
+              : const SettingsModel();
+          final use24HourFormat = settings.show24HourTime;
 
-        final tasks = _getFilteredTasks(state.tasks);
+          if (state is TaskLoading && state.tasks.isEmpty) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
 
-        // ✅ ADDED: TaskOperationInProgress — list stays visible with subtle
-        // LinearProgressIndicator at top while add/update/delete is in progress
-        final isOperationInProgress = state is TaskOperationInProgress;
+          final tasks = _getFilteredTasks(state.tasks);
+          final isOperationInProgress = state is TaskOperationInProgress;
 
-        return Scaffold(
-          backgroundColor: const Color(0xFFF8F9FB),
-          body: SafeArea(
-            child: Stack(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 12),
-                      Text(
-                        '${_getGreeting()}, $userName 👋',
-                        style: const TextStyle(
-                            fontSize: 20, fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        DateFormat('EEEE, MMMM d, y').format(DateTime.now()),
-                        style:
-                        const TextStyle(fontSize: 13, color: Colors.grey),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          _FilterChip(
-                            label: 'All Tasks',
-                            isActive: _selectedFilter == 'All Tasks',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'All Tasks'),
-                          ),
-                          _FilterChip(
-                            label: 'In Progress',
-                            isActive: _selectedFilter == 'In Progress',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'In Progress'),
-                          ),
-                          _FilterChip(
-                            label: 'Completed',
-                            isActive: _selectedFilter == 'Completed',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'Completed'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          hintText: 'Search tasks...',
-                          prefixIcon: const Icon(Icons.search),
-                          suffixIcon: _searchController.text.isNotEmpty
-                              ? IconButton(
-                            icon: const Icon(Icons.clear, size: 20),
-                            onPressed: () => _searchController.clear(),
-                          )
-                              : null,
-                          border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                          filled: true,
-                          fillColor: Colors.white,
+          return Scaffold(
+            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+            body: SafeArea(
+              child: Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 12),
+                        Text(
+                          '${_getGreeting()}, $userName 👋',
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w700),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: tasks.isEmpty
-                            ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.task_alt,
-                                  size: 80,
-                                  color: Colors.grey.shade300),
-                              const SizedBox(height: 16),
-                              Text(
-                                _searchController.text.isNotEmpty
-                                    ? 'No tasks found'
-                                    : 'No tasks yet',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.grey.shade600,
-                                  fontWeight: FontWeight.w500,
+                        const SizedBox(height: 4),
+                        Text(
+                          DateFormat('EEEE, MMMM d, y').format(DateTime.now()),
+                          style: const TextStyle(
+                              fontSize: 13, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            _FilterChip(
+                              label: 'All Tasks',
+                              isActive: _selectedFilter == 'All Tasks',
+                              onTap: () =>
+                                  setState(() => _selectedFilter = 'All Tasks'),
+                            ),
+                            _FilterChip(
+                              label: 'In Progress',
+                              isActive: _selectedFilter == 'In Progress',
+                              onTap: () =>
+                                  setState(() => _selectedFilter = 'In Progress'),
+                            ),
+                            _FilterChip(
+                              label: 'Completed',
+                              isActive: _selectedFilter == 'Completed',
+                              onTap: () =>
+                                  setState(() => _selectedFilter = 'Completed'),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: 'Search tasks...',
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (_searchController.text.isNotEmpty)
+                                  IconButton(
+                                    icon: const Icon(Icons.clear, size: 20),
+                                    onPressed: () => _searchController.clear(),
+                                  ),
+                                IconButton(
+                                  icon: const Icon(Icons.mic, color: Colors.blue),
+                                  onPressed: _startQuickVoiceInput,
                                 ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _searchController.text.isNotEmpty
-                                    ? 'Try a different search'
-                                    : 'Tap + to add your first task',
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey.shade500),
-                              ),
-                            ],
+                              ],
+                            ),
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12)),
                           ),
-                        )
-                            : ListView.builder(
-                          itemCount: tasks.length,
-                          itemBuilder: (context, index) {
-                            final task = tasks[index];
-                            return _buildTaskItem(task);
-                          },
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                // ✅ ADDED: subtle LinearProgressIndicator shown at top of screen
-                // only during CRUD operations — list stays fully visible below it
-                if (isOperationInProgress)
-                  const Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: LinearProgressIndicator(
-                      backgroundColor: Colors.transparent,
-                      color: Colors.blue,
-                      minHeight: 3,
+                        const SizedBox(height: 16),
+                        Expanded(
+                          child: tasks.isEmpty
+                              ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.task_alt,
+                                    size: 80,
+                                    color: Colors.grey.shade300),
+                                const SizedBox(height: 16),
+                                Text(
+                                  _searchController.text.isNotEmpty
+                                      ? 'No tasks found'
+                                      : 'No tasks yet',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    color: Colors.grey.shade600,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _searchController.text.isNotEmpty
+                                      ? 'Try a different search'
+                                      : 'Tap + to add your first task',
+                                  style: TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.grey.shade500),
+                                ),
+                              ],
+                            ),
+                          )
+                              : ListView.builder(
+                            itemCount: tasks.length,
+                            itemBuilder: (context, index) {
+                              final task = tasks[index];
+                              return _buildTaskItem(task, use24HourFormat);
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
                     ),
                   ),
+                  if (isOperationInProgress)
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: LinearProgressIndicator(
+                        backgroundColor: Colors.transparent,
+                        color: Colors.blue,
+                        minHeight: 3,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            floatingActionButton: AnimatedBuilder(
+              animation: _offsetAnimation,
+              builder: (context, child) => Transform.translate(
+                offset: Offset(0, _offsetAnimation.value),
+                child: child,
+              ),
+              child: FloatingActionButton(
+                backgroundColor: Colors.blue,
+                onPressed: _showAddTaskDialog,
+                shape: const CircleBorder(),
+                child: const Icon(Icons.add, color: Colors.white),
+              ),
+            ),
+            bottomNavigationBar: BottomNavigationBar(
+              currentIndex: _currentIndex > 3 ? 0 : _currentIndex,
+              type: BottomNavigationBarType.fixed,
+              selectedItemColor: Colors.blue,
+              unselectedItemColor: Colors.grey,
+              onTap: (index) => _onBottomNavTap(index, state.tasks),
+              items: const [
+                BottomNavigationBarItem(
+                    icon: Icon(Icons.home_outlined), label: 'Home'),
+                BottomNavigationBarItem(
+                    icon: Icon(Icons.alarm_outlined), label: 'Loop'),
+                BottomNavigationBarItem(
+                    icon: Icon(Icons.calendar_month_outlined), label: 'Calendar'),
+                BottomNavigationBarItem(
+                    icon: Icon(Icons.settings_outlined), label: 'Settings'),
               ],
             ),
-          ),
-          floatingActionButton: AnimatedBuilder(
-            animation: _offsetAnimation,
-            builder: (context, child) => Transform.translate(
-              offset: Offset(0, _offsetAnimation.value),
-              child: child,
-            ),
-            child: FloatingActionButton.extended(
-              backgroundColor: Colors.blue,
-              onPressed: _showAddTaskDialog,
-              icon: const Icon(Icons.add, color: Colors.white),
-              label: const Text('Add Task',
-                  style: TextStyle(color: Colors.white)),
-            ),
-          ),
-          bottomNavigationBar: BottomNavigationBar(
-            currentIndex: _currentIndex,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: Colors.blue,
-            unselectedItemColor: Colors.grey,
-            onTap: _onBottomNavTap,
-            items: const [
-              BottomNavigationBarItem(
-                  icon: Icon(Icons.home_outlined), label: 'Home'),
-              BottomNavigationBarItem(
-                  icon: Icon(Icons.mic_none), label: 'Voice Input'),
-
-              BottomNavigationBarItem(
-                  icon: Icon(Icons.settings_outlined), label: 'Settings'),
-            ],
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 
-  Widget _buildTaskItem(TaskModel task) {
+  void _onVoiceStateChanged(BuildContext context, VoiceState state) {
+    if (!_isQuickVoiceActive) return;
+
+    if (state is VoiceRecognizedState) {
+      final text = state.recognizedText.trim();
+      if (text.isNotEmpty) {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          setState(() => _isQuickVoiceActive = false);
+
+          final parsed = TaskParser.parseVoiceInput(text);
+
+          final settingsState = context.read<SettingsBloc>().state;
+          final settings = settingsState is SettingsLoaded
+              ? settingsState.settings
+              : settingsState is SettingsUpdateSuccess
+              ? settingsState.settings
+              : null;
+
+          final newTask = TaskModel(
+            id: '',
+            title: parsed.title.isEmpty ? text : parsed.title,
+            description: 'Created via quick voice',
+            scheduledTime: parsed.dateTime ?? DateTime.now().add(const Duration(hours: 1)),
+          );
+
+          context.read<TaskBloc>().add(AddTask(user.uid, newTask, settings: settings));
+
+          if (Navigator.canPop(context)) {
+            Navigator.pop(context);
+          }
+        }
+      }
+    } else if (state is VoiceErrorState) {
+      setState(() => _isQuickVoiceActive = false);
+      _showSnackBar(state.errorMessage, Colors.red);
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    }
+  }
+
+  void _startQuickVoiceInput() {
+    if (_isQuickVoiceActive) return;
+
+    setState(() => _isQuickVoiceActive = true);
+    context.read<VoiceBloc>().add(const StartListeningEvent());
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => const _QuickVoiceOverlay(),
+    ).then((_) {
+      if (mounted) {
+        setState(() => _isQuickVoiceActive = false);
+        context.read<VoiceBloc>().add(const StopListeningEvent());
+      }
+    });
+  }
+
+  Widget _buildTaskItem(TaskModel task, bool use24HourFormat) {
     return Slidable(
       key: ValueKey(task.id),
       endActionPane: ActionPane(
@@ -305,10 +408,42 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
           ),
         ],
       ),
-      child: TaskCard(
-        task: task,
-        onToggle: () => _toggleTaskCompletion(task),
-        onDelete: () => _deleteTask(task.id),
+      child: Stack(
+        children: [
+          TaskCard(
+            task: task,
+            use24HourFormat: use24HourFormat,
+            onToggle: () => _toggleTaskCompletion(task),
+            onDelete: () => _deleteTask(task.id),
+          ),
+          if (!task.isSynced)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: const [
+                    Icon(Icons.cloud_off, size: 10, color: Colors.orange),
+                    SizedBox(width: 4),
+                    Text(
+                      'OFFLINE',
+                      style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.orange,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -348,40 +483,151 @@ class _TaskHomeScreenState extends State<TaskHomeScreen>
   void _toggleTaskCompletion(TaskModel task) {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || !mounted) return;
+    final settingsState = context.read<SettingsBloc>().state;
+    final settings = settingsState is SettingsLoaded
+        ? settingsState.settings
+        : settingsState is SettingsUpdateSuccess
+        ? settingsState.settings
+        : null;
     context.read<TaskBloc>().add(
-      UpdateTask(user.uid, task.copyWith(isCompleted: !task.isCompleted)),
-    );
-  }
-
-  void _showAddTaskDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => BlocProvider.value(
-        value: context.read<TaskBloc>(),
-        child: const AddTaskDialog(),
+      UpdateTask(
+        user.uid,
+        task.copyWith(isCompleted: !task.isCompleted),
+        settings: settings,
       ),
     );
   }
 
-  void _onBottomNavTap(int index) {
-    if (index == 0) return;
+  void _showAddTaskDialog({DateTime? initialDate}) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      useRootNavigator: false,
+      builder: (_) => MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: context.read<TaskBloc>()),
+          BlocProvider.value(value: context.read<SettingsBloc>()),
+        ],
+        child: AddTaskDialog(initialDate: initialDate),
+      ),
+    );
+  }
 
-    setState(() => _currentIndex = index);
-
-    Widget screen;
-    if (index == 1) {
-      screen = const VoiceInputScreen();
-    } else if (index == 2) {
-      screen = const SettingsScreen(); // ← was FakeCallScreen
-    } else {
+  void _onBottomNavTap(int index, List<TaskModel> tasks) {
+    if (index == 0) {
+      setState(() => _currentIndex = 0);
       return;
     }
 
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen))
-        .then((_) {
-      if (mounted) setState(() => _currentIndex = 0);
-    });
+    // Loop screen
+    if (index == 1) {
+      setState(() => _currentIndex = 1);
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const TaskLoopScreen()),
+      ).then((_) {
+        if (mounted) setState(() => _currentIndex = 0);
+      });
+      return;
+    }
+
+    // Calendar
+    if (index == 2) {
+      _showFullCalendar(tasks);
+      return;
+    }
+
+    // Settings
+    if (index == 3) {
+      setState(() => _currentIndex = 3);
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      ).then((_) {
+        if (mounted) setState(() => _currentIndex = 0);
+      });
+      return;
+    }
+  }
+
+  void _showFullCalendar(List<TaskModel> tasks) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.7,
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 20),
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Text(
+              'Calendar Events',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: StatefulBuilder(
+                builder: (context, setModalState) {
+                  return TableCalendar(
+                    firstDay: DateTime.utc(2020, 1, 1),
+                    lastDay: DateTime.utc(2030, 12, 31),
+                    focusedDay: _focusedDay,
+                    calendarFormat: CalendarFormat.month,
+                    selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+                    eventLoader: (day) {
+                      return tasks.where((task) => isSameDay(task.scheduledTime, day)).toList();
+                    },
+                    onDaySelected: (selectedDay, focusedDay) {
+                      setModalState(() {
+                        _selectedDay = selectedDay;
+                        _focusedDay = focusedDay;
+                      });
+                      setState(() {
+                        _selectedDay = selectedDay;
+                        _focusedDay = focusedDay;
+                      });
+                      Navigator.pop(context);
+                      _showAddTaskDialog(initialDate: selectedDay);
+                    },
+                    calendarStyle: CalendarStyle(
+                      todayDecoration: BoxDecoration(
+                        color: Colors.blue.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      selectedDecoration: const BoxDecoration(
+                        color: Colors.blue,
+                        shape: BoxShape.circle,
+                      ),
+                      markerDecoration: const BoxDecoration(
+                        color: Colors.orange,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    headerStyle: const HeaderStyle(
+                      formatButtonVisible: false,
+                      titleCentered: true,
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -404,7 +650,6 @@ class _FilterChip extends StatelessWidget {
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
-          // ✅ FIXED: withAlpha(20) → withValues(alpha: 0.08) — not deprecated
           color: isActive
               ? Colors.blue
               : Colors.blue.withValues(alpha: 0.08),
@@ -419,6 +664,129 @@ class _FilterChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _QuickVoiceOverlay extends StatelessWidget {
+  const _QuickVoiceOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocBuilder<VoiceBloc, VoiceState>(
+      builder: (context, state) {
+        String text = 'Listening...';
+        if (state is VoiceListeningState && state.partialResult != null) {
+          text = state.partialResult!;
+        }
+
+        return Container(
+          height: 250,
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Direct Voice Input',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    text,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: text == 'Listening...' ? Colors.grey : Theme.of(context).textTheme.bodyLarge?.color,
+                      fontStyle: text == 'Listening...' ? FontStyle.italic : FontStyle.normal,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const _RippleMicIcon(),
+              const SizedBox(height: 8),
+              Text(
+                'Speak your task and stop to save',
+                style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RippleMicIcon extends StatefulWidget {
+  const _RippleMicIcon();
+
+  @override
+  State<_RippleMicIcon> createState() => _RippleMicIconState();
+}
+
+class _RippleMicIconState extends State<_RippleMicIcon>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.blue.withValues(alpha: 0.1),
+          ),
+          child: Center(
+            child: Container(
+              width: 40 + (20 * _controller.value),
+              height: 40 + (20 * _controller.value),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.blue.withValues(alpha: 0.2 - (0.2 * _controller.value)),
+              ),
+              child: const Icon(Icons.mic, color: Colors.blue, size: 28),
+            ),
+          ),
+        );
+      },
     );
   }
 }

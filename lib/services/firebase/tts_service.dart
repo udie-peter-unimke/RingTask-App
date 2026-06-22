@@ -67,7 +67,6 @@ class TtsService {
     }
 
     final buffer = StringBuffer();
-
     if (readTitle && title.trim().isNotEmpty) {
       buffer.write(title.trim());
     }
@@ -80,7 +79,11 @@ class TtsService {
     if (text.isEmpty) return;
 
     try {
-      await _flutterTts.stop(); // clear queue
+      // ✅ Remove the await _flutterTts.stop() here.
+      // Calling stop() before speak() causes the "Interrupted: true" log
+      // when another instance already started speaking — it kills the
+      // FakeCallService utterance then speaks nothing because the
+      // subsequent speak() loses audio focus to the system.
       final result = await _flutterTts.speak(text);
       if (result == 1) {
         AppLogger.info('TTS speaking: "$text"');
@@ -96,7 +99,7 @@ class TtsService {
   }
 
   Future<void> stop() async {
-    if (_isSpeaking || _isInitialized) {
+    if (_isSpeaking) {
       await _flutterTts.stop();
       _isSpeaking = false;
       AppLogger.info('TTS stopped');

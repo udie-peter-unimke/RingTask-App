@@ -1,41 +1,80 @@
-// lib/blocs/task/task_bloc.dart
-import 'dart:convert';
-import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:ringtask/repositories/fake_call_repository.dart';
 import 'package:ringtask/repositories/task_repository.dart';
 import 'package:ringtask/data/models/task_model.dart';
+import 'package:ringtask/data/models/settings_model.dart';
 import 'package:ringtask/blocs/task/task_event.dart';
 import 'package:ringtask/blocs/task/task_state.dart';
 import 'package:ringtask/utils/logger.dart';
 
 class TaskBloc extends Bloc<TaskEvent, TaskState> {
   final TaskRepository taskRepository;
-  static const _channel = MethodChannel('ringtask/workmanager');
+  final FakeCallRepository fakeCallRepository;
+  StreamSubscription<List<TaskModel>>? _tasksSubscription;
 
-  TaskBloc({required this.taskRepository}) : super(const TaskInitial()) {
+  TaskBloc({
+    required this.taskRepository,
+    required this.fakeCallRepository,
+  }) : super(const TaskInitial()) {
     on<LoadTasks>(_onLoadTasks);
     on<AddTask>(_onAddTask);
     on<UpdateTask>(_onUpdateTask);
     on<DeleteTask>(_onDeleteTask);
+    on<TasksUpdated>(_onTasksUpdated);
   }
 
   Future<void> _onLoadTasks(LoadTasks event, Emitter<TaskState> emit) async {
-    try {
-      emit(TaskLoading(tasks: state.tasks));
-      final allTasks = await taskRepository.getAllTasks(event.userId);
+    // Safety state gate: skip if already loading and list is empty
+    if (state is TaskLoading && state.tasks.isEmpty) {
+      AppLogger.warning('LoadTasks event skipped — already in progress');
+      return;
+    }
 
-      for (final task in allTasks) {
-        if (task.scheduledTime != null &&
-            task.scheduledTime!.isAfter(DateTime.now())) {
-          await _scheduleFakeCallSafely(task);
-        }
+    try {
+      // 1. Setup real-time listener
+      _tasksSubscription?.cancel();
+      _tasksSubscription = taskRepository.getTasksStream(event.userId).listen((tasks) {
+        add(TasksUpdated(tasks));
+      });
+
+      // 2. Initial loading state (keep existing tasks if any)
+      emit(TaskLoading(tasks: state.tasks));
+
+      // 2. 🚀 CACHE FIRST: Show cached tasks immediately for instant UI
+      final cachedTasks = await taskRepository.getCachedTasks(event.userId);
+      if (cachedTasks != null && cachedTasks.isNotEmpty) {
+        emit(TaskLoaded(cachedTasks));
+        AppLogger.info('⚡ Displayed ${cachedTasks.length} cached tasks');
       }
 
+      // 3. ☁️ SYNC: Fetch fresh data from Firestore
+      final allTasks = await taskRepository.getAllTasks(event.userId);
+
+      // 4. Final state: Update with fresh data.
+      // We don't merge here to allow Firestore to be the source of truth
+      // (e.g., if a task was deleted on another device).
       emit(TaskLoaded(allTasks));
-      AppLogger.info('✅ Loaded ${allTasks.length} tasks');
+      AppLogger.info('✅ Loaded ${allTasks.length} tasks from Firestore');
+
+      // 5. Registration for alarms
+      _rescheduleAllUpcomingAlarms(allTasks, event.settings);
+
     } catch (e) {
       AppLogger.error('❌ LoadTasks failed: $e');
+      // On error, try to fall back to whatever we have in state
       emit(TaskError('Failed to load tasks: $e', tasks: state.tasks));
+    }
+  }
+
+  // Helper method running un-awaited to offload work from the synchronous cycle
+  void _rescheduleAllUpcomingAlarms(List<TaskModel> tasks, SettingsModel? settings) {
+    final now = DateTime.now();
+    for (final task in tasks) {
+      if (task.scheduledTime != null && task.scheduledTime!.isAfter(now)) {
+        // Fire and forget down to native platform channels
+        _scheduleFakeCallSafely(task, settings: settings);
+      }
     }
   }
 
@@ -52,27 +91,27 @@ class TaskBloc extends Bloc<TaskEvent, TaskState> {
             : false,
       );
 
-      final success = await taskRepository.createTask(
+      final savedTask = await taskRepository.createTask(
         event.userId,
         taskWithTimestamps,
       );
 
-      if (!success) {
-        emit(TaskError('Failed to create task', tasks: currentTasks));
+      if (savedTask == null) {
+        emit(TaskError('Failed to create task locally', tasks: currentTasks));
         return;
       }
 
-      if (taskWithTimestamps.scheduledTime != null &&
-          taskWithTimestamps.scheduledTime!.isAfter(DateTime.now())) {
-        await _scheduleFakeCallSafely(taskWithTimestamps);
+      // Schedule reminder immediately (this is a local operation)
+      if (savedTask.scheduledTime != null &&
+          savedTask.scheduledTime!.isAfter(DateTime.now())) {
+        await _scheduleFakeCallSafely(savedTask, settings: event.settings);
       }
 
-      final updatedTasks = [...currentTasks, taskWithTimestamps];
-      emit(TaskAdded(taskWithTimestamps, updatedTasks));
-      AppLogger.info('✅ Added task: ${taskWithTimestamps.title}');
+      final updatedTasks = [...currentTasks, savedTask];
+      emit(TaskAdded(savedTask, updatedTasks));
     } catch (e) {
       AppLogger.error('❌ AddTask failed: $e');
-      emit(TaskError('Failed to add task: $e', tasks: currentTasks));
+      emit(TaskError('Could not add task: $e', tasks: currentTasks));
     }
   }
 
@@ -88,34 +127,32 @@ class TaskBloc extends Bloc<TaskEvent, TaskState> {
             : false,
       );
 
-      final success = await taskRepository.updateTask(
+      final savedTask = await taskRepository.updateTask(
         event.userId,
         updatedTask.id,
         updatedTask,
       );
 
-      if (!success) {
-        emit(TaskError('Task not found', tasks: currentTasks));
+      if (savedTask == null) {
+        emit(TaskError('Task update failed locally', tasks: currentTasks));
         return;
       }
 
-      // ✅ Cancel only THIS task's scheduled call before rescheduling
-      await _cancelTaskSafely(updatedTask.id);
+      await fakeCallRepository.cancelScheduledReminder(savedTask.id);
 
-      if (updatedTask.scheduledTime != null &&
-          updatedTask.scheduledTime!.isAfter(DateTime.now())) {
-        await _scheduleFakeCallSafely(updatedTask);
+      if (savedTask.scheduledTime != null &&
+          savedTask.scheduledTime!.isAfter(DateTime.now())) {
+        await _scheduleFakeCallSafely(savedTask, settings: event.settings);
       }
 
       final updatedTasks = currentTasks
-          .map((t) => t.id == updatedTask.id ? updatedTask : t)
+          .map((t) => t.id == savedTask.id ? savedTask : t)
           .toList();
 
-      emit(TaskUpdated(updatedTask, updatedTasks));
-      AppLogger.info('✅ Updated task: ${updatedTask.title}');
+      emit(TaskUpdated(savedTask, updatedTasks));
     } catch (e) {
       AppLogger.error('❌ UpdateTask failed: $e');
-      emit(TaskError('Failed to update task: $e', tasks: currentTasks));
+      emit(TaskError('Could not update task: $e', tasks: currentTasks));
     }
   }
 
@@ -130,59 +167,43 @@ class TaskBloc extends Bloc<TaskEvent, TaskState> {
       );
 
       if (!success) {
-        emit(TaskError('Task not found', tasks: currentTasks));
+        emit(TaskError('Delete failed locally', tasks: currentTasks));
         return;
       }
 
-      // ✅ Cancel only THIS task's scheduled call
-      await _cancelTaskSafely(event.taskId);
+      await fakeCallRepository.cancelScheduledReminder(event.taskId);
 
       final updatedTasks =
       currentTasks.where((t) => t.id != event.taskId).toList();
       emit(TaskDeleted(event.taskId, updatedTasks));
-      AppLogger.info('✅ Deleted task: ${event.taskId}');
     } catch (e) {
       AppLogger.error('❌ DeleteTask failed: $e');
-      emit(TaskError('Failed to delete task: $e', tasks: currentTasks));
+      emit(TaskError('Could not delete task: $e', tasks: currentTasks));
     }
   }
 
-  // ✅ Now async + awaited so failures are caught
-  // ✅ Passes taskId as tag so each task's call is independently cancellable
-  Future<void> _scheduleFakeCallSafely(TaskModel task) async {
+  void _onTasksUpdated(TasksUpdated event, Emitter<TaskState> emit) {
+    emit(TaskLoaded(event.tasks));
+  }
+
+  @override
+  Future<void> close() {
+    _tasksSubscription?.cancel();
+    return super.close();
+  }
+
+  Future<void> _scheduleFakeCallSafely(
+      TaskModel task, {
+        SettingsModel? settings,
+      }) async {
     try {
-      final delay = task.scheduledTime!.difference(DateTime.now());
-
-      // ✅ Build description speech — guard against empty string
-      final description = task.description.trim();
-
-      final payload = jsonEncode({
-        'taskId': task.id,
-        'title': task.title.trim(),
-        'description': description, // may be empty — FakeCallScreen handles it
-        'callerName': 'RingTask Reminder',
-        'ringtonePath': 'sounds/ringtone.mp3',
-      });
-
-      await _channel.invokeMethod('scheduleFakeCall', {
-        'delayMillis': (delay.isNegative ? Duration.zero : delay).inMilliseconds,
-        'payload': payload,
-        'tag': 'fakeCall_${task.id}', // ✅ Unique tag per task
-      });
-
-      AppLogger.info('⏰ Scheduled: ${task.title} in ${delay.inMinutes}min');
+      await fakeCallRepository.scheduleTaskReminder(
+        task,
+        settings: settings,
+      );
+      AppLogger.info('⏰ Scheduled: ${task.title}');
     } catch (e) {
       AppLogger.error('❌ Schedule failed for ${task.title}: $e');
-    }
-  }
-
-  // ✅ Cancels a specific task's scheduled call by its unique tag
-  Future<void> _cancelTaskSafely(String taskId) async {
-    try {
-      await _channel.invokeMethod('cancelFakeCall', {'tag': 'fakeCall_$taskId'});
-      AppLogger.info('🗑️ Cancelled scheduled call for task: $taskId');
-    } catch (e) {
-      AppLogger.error('❌ Cancel failed for task $taskId: $e');
     }
   }
 

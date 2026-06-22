@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
-import 'package:ringtask/core/di/service_locator.dart';
-import 'package:ringtask/services/firebase/fake_call_service.dart';
+import 'package:ringtask/blocs/fake_call/fake_call_bloc.dart';
+import 'package:ringtask/blocs/fake_call/fake_call_event.dart';
+import 'package:ringtask/router.dart';
+import 'dart:convert';
 
 class FakeCallScreen extends StatefulWidget {
-  const FakeCallScreen({super.key});
+  final Map<String, dynamic>? payload;
+
+  const FakeCallScreen({super.key, this.payload, required Map<String, dynamic> data});
 
   @override
   State<FakeCallScreen> createState() => _FakeCallScreenState();
@@ -16,7 +21,8 @@ class _FakeCallScreenState extends State<FakeCallScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   final AudioPlayer _ringtonePlayer = AudioPlayer();
-  bool _isRinging = true;
+  bool _ringingStarted = false;
+  bool _isStopping = false;
 
   Map<String, dynamic>? taskData;
 
@@ -33,33 +39,82 @@ class _FakeCallScreenState extends State<FakeCallScreen>
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
 
-    _startRingtone();
-    _startVibration();
+    if (widget.payload != null) {
+      taskData = widget.payload;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _startRingtone();
+        _startVibration();
+      }
+    });
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // Get task data from route arguments
-    if (taskData == null) {
-      final args = ModalRoute.of(context)?.settings.arguments;
+    if (taskData != null) return;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+    try {
       if (args is Map<String, dynamic>) {
-        setState(() {
-          taskData = args;
-        });
+        taskData = args;
+      } else if (args is String) {
+        taskData = jsonDecode(args) as Map<String, dynamic>;
       }
+      if (taskData != null) setState(() {});
+    } catch (e) {
+      debugPrint('Failed to parse fake call args: $e');
     }
   }
 
   Future<void> _startRingtone() async {
+    if (_ringingStarted) return;
+    _ringingStarted = true;
+
     try {
-      final ringtonePath = taskData?['ringtonePath'] ?? 'sounds/ringtone.mp3';
+      // ✅ FIX: Set context on the INSTANCE player, not AudioPlayer.global.
+      // Setting it globally races with other audio sessions and may not
+      // apply to _ringtonePlayer at all.
+      await _ringtonePlayer.setAudioContext(
+        AudioContext(
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.alarm,
+            audioFocus: AndroidAudioFocus.gain,
+          ),
+        ),
+      );
+
       await _ringtonePlayer.setReleaseMode(ReleaseMode.loop);
-      await _ringtonePlayer.play(AssetSource(ringtonePath));
+      await _ringtonePlayer.setVolume(1.0);
+
+      final customPath = taskData?['ringtonePath'] as String?;
+      final hasCustomPath = customPath != null &&
+          customPath.isNotEmpty &&
+          customPath != 'null' &&
+          !customPath.startsWith('/android_asset') &&
+          customPath.startsWith('/');
+
+      if (hasCustomPath) {
+        await _ringtonePlayer.play(DeviceFileSource(customPath));
+      } else {
+        await _ringtonePlayer.play(AssetSource('sounds/ringtone.mp3'));
+      }
     } catch (e) {
-      debugPrint('Error playing ringtone: $e');
+      debugPrint('Ringtone error: $e — falling back to default');
+      try {
+        await _ringtonePlayer.stop();
+        await _ringtonePlayer.play(AssetSource('sounds/ringtone.mp3'));
+      } catch (e2) {
+        debugPrint('Default ringtone also failed: $e2');
+      }
     }
   }
+
 
   Future<void> _startVibration() async {
     try {
@@ -67,55 +122,84 @@ class _FakeCallScreenState extends State<FakeCallScreen>
         Vibration.vibrate(pattern: [500, 1000, 500, 1000], repeat: 0);
       }
     } catch (e) {
-      debugPrint('Error vibrating: $e');
+      debugPrint('Vibration error: $e');
     }
   }
 
   Future<void> _stopRinging() async {
-    setState(() => _isRinging = false);
-    await _ringtonePlayer.stop();
-    await Vibration.cancel();
-    _pulseController.stop();
+    // Guard against overlapping stop calls from dispose + _handleAccept
+    if (_isStopping) return;
+    _isStopping = true;
+
+    // Stop animation first — no more UI updates after this point
+    if (_pulseController.isAnimating) {
+      _pulseController.stop();
+    }
+
+    // Cancel vibration before touching audio — avoids channel contention
+    try {
+      await Vibration.cancel();
+    } catch (_) {}
+
+    // Single sequential stop — prevents native seek/reset race condition
+    try {
+      await _ringtonePlayer.stop();
+    } catch (_) {}
   }
 
   Future<void> _handleAccept() async {
+    // Prevent double-execution if user taps accept twice rapidly
+    if (_isStopping) return;
+
     await _stopRinging();
+    if (!mounted) return;
 
-    // Speak the task description
-    final description = taskData?['description'] ??
-        taskData?['title'] ??
-        'Your task is due now';
+    context.read<FakeCallBloc>().add(const AnswerFakeCallEvent());
 
-    final fakeCallService = getIt<FakeCallService>();
-    await fakeCallService.speakText(description);
+    // Pass overlay flag so TTS screen shows the call-like UI
+    final Map<String, dynamic> navArgs = Map.from(taskData ?? {});
+    navArgs['isFullScreenOverlay'] = true;
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Task: ${taskData?['title'] ?? 'Reminder'}'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-
-      // Stay on screen to show task details
-      setState(() {});
-    }
+    // pushReplacementNamed — removes fake call screen from back stack
+    // so pressing back from TTS screen doesn't return to a stale call UI
+    Navigator.pushReplacementNamed(
+      context,
+      AppRouter.ttsRoute,
+      arguments: navArgs,
+    );
   }
 
   Future<void> _handleDecline() async {
-    await _stopRinging();
+    if (_isStopping) return;
 
-    if (mounted) {
-      Navigator.of(context).pop();
+    await _stopRinging();
+    if (!mounted) return;
+
+    context.read<FakeCallBloc>().add(const DeclineFakeCallEvent());
+
+    // If this screen was pushed at startup by an alarm, there might be no
+    // home screen behind it. Ensure we have a place to go.
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    } else {
+      Navigator.pushNamedAndRemoveUntil(
+        context,
+        AppRouter.homeRoute,
+        (route) => false,
+      );
     }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    // _isStopping guards against double-stop if _handleAccept already ran
+    if (!_isStopping) {
+      _ringtonePlayer.stop();
+      Vibration.cancel();
+    }
+    // Release the player after stop — prevents the native reset/release race
     _ringtonePlayer.dispose();
-    Vibration.cancel();
     super.dispose();
   }
 
@@ -123,28 +207,21 @@ class _FakeCallScreenState extends State<FakeCallScreen>
   Widget build(BuildContext context) {
     final callerName = taskData?['callerName'] ?? 'Task Reminder';
     final title = taskData?['title'] ?? 'Reminder';
-    final description = taskData?['description'] ?? '';
 
     return Scaffold(
-      backgroundColor: _isRinging ? const Color(0xFF1E1E1E) : Colors.white,
+      backgroundColor: const Color(0xFF1E1E1E),
       body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 300),
-          child: _isRinging ? _buildIncomingCallUI(callerName, title) : _buildAnsweredCallUI(title, description),
-        ),
+        child: _buildIncomingCallUI(callerName, title),
       ),
     );
   }
 
   Widget _buildIncomingCallUI(String callerName, String title) {
-    return Container(
-      key: const ValueKey('incoming'),
+    return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         children: [
           const SizedBox(height: 60),
-
-          // Caller Name
           Text(
             callerName,
             style: const TextStyle(
@@ -154,10 +231,7 @@ class _FakeCallScreenState extends State<FakeCallScreen>
             ),
             textAlign: TextAlign.center,
           ),
-
           const SizedBox(height: 12),
-
-          // Task Title
           Text(
             title,
             style: const TextStyle(
@@ -169,10 +243,7 @@ class _FakeCallScreenState extends State<FakeCallScreen>
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
-
           const SizedBox(height: 40),
-
-          // Pulsing Avatar
           AnimatedBuilder(
             animation: _pulseAnimation,
             builder: (context, child) {
@@ -201,240 +272,68 @@ class _FakeCallScreenState extends State<FakeCallScreen>
               );
             },
           ),
-
           const SizedBox(height: 40),
-
-          // Incoming Call Text
           const Text(
             'Incoming Task Reminder',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.white70,
-            ),
+            style: TextStyle(fontSize: 16, color: Colors.white70),
           ),
-
           const Spacer(),
-
-          // Action Buttons
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              // Decline Button
-              Column(
-                children: [
-                  GestureDetector(
-                    onTap: _handleDecline,
-                    child: Container(
-                      width: 70,
-                      height: 70,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFFFF4444),
-                      ),
-                      child: const Icon(
-                        Icons.call_end,
-                        color: Colors.white,
-                        size: 32,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Decline',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+              _CallButton(
+                icon: Icons.call_end,
+                color: const Color(0xFFFF4444),
+                label: 'Decline',
+                onTap: _handleDecline,
               ),
-
-              // Accept Button
-              Column(
-                children: [
-                  GestureDetector(
-                    onTap: _handleAccept,
-                    child: Container(
-                      width: 70,
-                      height: 70,
-                      decoration: const BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Color(0xFF4CAF50),
-                      ),
-                      child: const Icon(
-                        Icons.call,
-                        color: Colors.white,
-                        size: 32,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Accept',
-                    style: TextStyle(
-                      color: Colors.white70,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
+              _CallButton(
+                icon: Icons.call,
+                color: const Color(0xFF4CAF50),
+                label: 'Accept',
+                onTap: _handleAccept,
               ),
             ],
           ),
-
           const SizedBox(height: 60),
         ],
       ),
     );
   }
+}
 
-  Widget _buildAnsweredCallUI(String title, String description) {
-    return Container(
-      key: const ValueKey('answered'),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        children: [
-          const SizedBox(height: 40),
+class _CallButton extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final String label;
+  final VoidCallback onTap;
 
-          // Success Icon
-          Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: const Color(0xFF4CAF50).withValues(alpha:0.1),
-            ),
-            child: const Icon(
-              Icons.check_circle,
-              size: 60,
-              color: Color(0xFF4CAF50),
-            ),
+  const _CallButton({
+    required this.icon,
+    required this.color,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 70,
+            height: 70,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+            child: Icon(icon, color: Colors.white, size: 32),
           ),
-
-          const SizedBox(height: 30),
-
-          const Text(
-            'Task Details',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: Color(0xFF2196F3),
-            ),
-          ),
-
-          const SizedBox(height: 20),
-
-          // Task Title
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.grey[100],
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Title:',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black87,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          if (description.isNotEmpty) ...[
-            const SizedBox(height: 16),
-
-            // Task Description
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Description:',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    description,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-
-          const SizedBox(height: 20),
-
-          const Row(
-            children: [
-              Icon(Icons.volume_up, color: Color(0xFF2196F3), size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Reading task aloud...',
-                style: TextStyle(
-                  color: Color(0xFF2196F3),
-                  fontSize: 14,
-                  fontStyle: FontStyle.italic,
-                ),
-              ),
-            ],
-          ),
-
-          const Spacer(),
-
-          // Close Button
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2196F3),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text(
-                'Close',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 20),
-        ],
-      ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+      ],
     );
   }
 }

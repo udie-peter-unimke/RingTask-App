@@ -1,22 +1,43 @@
 *.iml
+
 # Flutter/Dart
 .dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
 android_backup/
 *.apk
 *.dill
 *.so
 build/
 .gradle
+
 /local.properties
+local.properties
+
+# IDE
+.idea/
+.vscode/
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+
+# Artifacts
+.artifacts/
+
+# OS
 .DS_Store
+
 /build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
+
+# Secrets
+**/android/key.properties
+**/key/my-release-key.jks
+
+# Firebase duplicate
+app/google-services (1).json

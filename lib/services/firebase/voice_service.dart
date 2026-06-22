@@ -18,6 +18,7 @@ abstract class IVoiceService {
 class VoiceService implements IVoiceService {
   final SpeechToText _speechToText = SpeechToText();
   bool _isListening = false;
+  bool _isInitializing = false;
   String _currentLocale = 'en_US';
   bool _hasResults = false;
 
@@ -25,6 +26,12 @@ class VoiceService implements IVoiceService {
 
   /// Initialize the speech-to-text service
   Future<void> initialize() async {
+    if (_speechToText.isAvailable || _isInitializing) {
+      AppLogger.info('VoiceService already initialized or initializing');
+      return;
+    }
+    _isInitializing = true;
+    final stopwatch = Stopwatch()..start();
     try {
       AppLogger.info('Initializing VoiceService');
       final available = await _speechToText.initialize(
@@ -38,13 +45,15 @@ class VoiceService implements IVoiceService {
       );
 
       if (available) {
-        AppLogger.info('Speech-to-text service initialized successfully');
+        AppLogger.info('Speech-to-text service initialized in ${stopwatch.elapsedMilliseconds}ms');
       } else {
         AppLogger.warning('Speech-to-text service not available');
       }
     } catch (e) {
       AppLogger.error('Error initializing VoiceService: $e');
       rethrow;
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -70,6 +79,18 @@ class VoiceService implements IVoiceService {
     required Function(String) onPartialResult,
   }) async {
     try {
+      // Ensure service is initialized
+      if (!_speechToText.isAvailable) {
+        AppLogger.info('VoiceService not available, attempting initialization before listening');
+        await initialize();
+      }
+
+      if (!_speechToText.isAvailable) {
+        AppLogger.warning('VoiceService still not available after initialization attempt');
+        onError('Speech recognition is not available on this device');
+        return;
+      }
+
       if (_isListening) {
         AppLogger.warning('Already listening for voice input');
         return;

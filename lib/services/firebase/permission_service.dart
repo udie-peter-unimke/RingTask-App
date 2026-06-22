@@ -1,4 +1,5 @@
-import 'package:permission_handler/permission_handler.dart';
+import 'package:permission_handler/permission_handler.dart' as ph;
+import 'package:permission_handler/permission_handler.dart' show Permission;
 import 'package:ringtask/utils/logger.dart';
 
 abstract class IPermissionService {
@@ -8,7 +9,12 @@ abstract class IPermissionService {
   Future<bool> requestCameraPermission();
   Future<bool> checkNotificationPermission();
   Future<bool> requestNotificationPermission();
-  Future<Map<Permission, PermissionStatus>> requestMultiplePermissions(
+  Future<bool> checkSpeechRecognitionPermission();
+  Future<bool> requestSpeechRecognitionPermission();
+  Future<bool> checkSystemAlertWindowPermission();
+  Future<bool> requestSystemAlertWindowPermission();
+  Future<bool> isMicrophonePermissionPermanentlyDenied();
+  Future<Map<Permission, ph.PermissionStatus>> requestMultiplePermissions(
       List<Permission> permissions,
       );
   Future<void> openAppSettings();
@@ -125,9 +131,86 @@ class PermissionService implements IPermissionService {
     }
   }
 
+  /// Check if speech recognition permission is granted
+  @override
+  Future<bool> checkSpeechRecognitionPermission() async {
+    try {
+      AppLogger.info('Checking speech recognition permission');
+      final status = await Permission.speech.status;
+      AppLogger.debug('Speech recognition permission status: ${status.name}');
+      final isGranted = status.isGranted;
+      AppLogger.info('Speech recognition permission granted: $isGranted');
+      return isGranted;
+    } catch (e) {
+      AppLogger.error('Error checking speech recognition permission: $e');
+      return false;
+    }
+  }
+
+  /// Request speech recognition permission from user
+  @override
+  Future<bool> requestSpeechRecognitionPermission() async {
+    try {
+      AppLogger.info('Requesting speech recognition permission');
+      final status = await Permission.speech.request();
+      AppLogger.debug('Speech recognition permission request result: ${status.name}');
+      return _handlePermissionStatus(status, 'speech recognition');
+    } catch (e) {
+      AppLogger.error('Error requesting speech recognition permission: $e');
+      return false;
+    }
+  }
+
+  /// Check if system alert window (overlay) permission is granted
+  @override
+  Future<bool> checkSystemAlertWindowPermission() async {
+    try {
+      AppLogger.info('Checking system alert window permission');
+      final status = await Permission.systemAlertWindow.status;
+
+      AppLogger.debug('System alert window permission status: ${status.name}');
+
+      final isGranted = status.isGranted;
+      AppLogger.info('System alert window permission granted: $isGranted');
+
+      return isGranted;
+    } catch (e) {
+      AppLogger.error('Error checking system alert window permission: $e');
+      return false;
+    }
+  }
+
+  /// Request system alert window (overlay) permission from user
+  @override
+  Future<bool> requestSystemAlertWindowPermission() async {
+    try {
+      AppLogger.info('Requesting system alert window permission');
+
+      final status = await Permission.systemAlertWindow.request();
+
+      AppLogger.debug('System alert window permission request result: ${status.name}');
+
+      return _handlePermissionStatus(status, 'system alert window');
+    } catch (e) {
+      AppLogger.error('Error requesting system alert window permission: $e');
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> isMicrophonePermissionPermanentlyDenied() async {
+    try {
+      final status = await Permission.microphone.status;
+      return status.isPermanentlyDenied;
+    } catch (e) {
+      AppLogger.error('Error checking if microphone permission is permanently denied: $e');
+      return false;
+    }
+  }
+
   /// Request multiple permissions at once
   @override
-  Future<Map<Permission, PermissionStatus>> requestMultiplePermissions(
+  Future<Map<Permission, ph.PermissionStatus>> requestMultiplePermissions(
       List<Permission> permissions,
       ) async {
     try {
@@ -153,7 +236,7 @@ class PermissionService implements IPermissionService {
   Future<void> openAppSettings() async {
     try {
       AppLogger.info('Opening app settings');
-      await openAppSettings();
+      await ph.openAppSettings();
       AppLogger.info('App settings opened successfully');
     } catch (e) {
       AppLogger.error('Error opening app settings: $e');
@@ -162,7 +245,7 @@ class PermissionService implements IPermissionService {
   }
 
   /// Handle permission status and return whether to proceed
-  bool _handlePermissionStatus(PermissionStatus status, String permissionName) {
+  bool _handlePermissionStatus(ph.PermissionStatus status, String permissionName) {
     if (status.isGranted) {
       AppLogger.info('$permissionName permission granted');
       return true;
@@ -178,26 +261,28 @@ class PermissionService implements IPermissionService {
     } else if (status.isProvisional) {
       AppLogger.warning('$permissionName permission is provisional');
       return false;
+    } else if (status.isPermanentlyDenied) {
+      AppLogger.warning('$permissionName permission is permanently denied');
+      return false;
     }
     return false;
   }
 
   /// Get human-readable permission status
-  String getPermissionStatusString(PermissionStatus status) {
+  String getPermissionStatusString(ph.PermissionStatus status) {
     switch (status) {
-      case PermissionStatus.granted:
+      case ph.PermissionStatus.granted:
         return 'Permission granted';
-      case PermissionStatus.denied:
+      case ph.PermissionStatus.denied:
         return 'Permission denied';
-      case PermissionStatus.restricted:
+      case ph.PermissionStatus.restricted:
         return 'Permission restricted';
-      case PermissionStatus.limited:
+      case ph.PermissionStatus.limited:
         return 'Permission limited';
-      case PermissionStatus.provisional:
+      case ph.PermissionStatus.provisional:
         return 'Permission provisional';
-      case PermissionStatus.permanentlyDenied:
-        // TODO: Handle this case.
-        throw UnimplementedError();
+      case ph.PermissionStatus.permanentlyDenied:
+        return 'Permission permanently denied';
     }
   }
 
@@ -208,20 +293,24 @@ class PermissionService implements IPermissionService {
 
       final statuses = await requestMultiplePermissions([
         Permission.microphone,
+        Permission.speech,
         Permission.notification,
       ]);
 
       final microphoneGranted =
           statuses[Permission.microphone]?.isGranted ?? false;
+      final speechGranted =
+          statuses[Permission.speech]?.isGranted ?? false;
       final notificationGranted =
           statuses[Permission.notification]?.isGranted ?? false;
 
       AppLogger.info(
         'Voice permissions - Microphone: $microphoneGranted, '
+            'Speech: $speechGranted, '
             'Notification: $notificationGranted',
       );
 
-      return microphoneGranted && notificationGranted;
+      return microphoneGranted && speechGranted && notificationGranted;
     } catch (e) {
       AppLogger.error('Error requesting voice and notification permissions: $e');
       return false;

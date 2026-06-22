@@ -83,13 +83,15 @@ class VoicePermissionGrantedState extends VoiceState {
 /// State when voice permission is denied
 class VoicePermissionDeniedState extends VoiceState {
   final String reason;
+  final bool isPermanentlyDenied;
 
   const VoicePermissionDeniedState({
     this.reason = 'Microphone permission is required',
+    this.isPermanentlyDenied = false,
   });
 
   @override
-  List<Object?> get props => [reason];
+  List<Object?> get props => [reason, isPermanentlyDenied];
 }
 
 /// State when voice is unavailable on device

@@ -1,4 +1,4 @@
-package com.example.ringtask
+package com.apexyron.ringtask
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -9,7 +9,7 @@ import android.util.Log
 class AlarmReceiver : BroadcastReceiver() {
 
     companion object {
-        const val ACTION_FAKE_CALL = "com.example.ringtask.FAKE_CALL"
+        const val ACTION_FAKE_CALL = "com.apexyron.ringtask.FAKE_CALL"
         const val EXTRA_PAYLOAD = "payload"
         private const val TAG = "AlarmReceiver"
         private const val WAKELOCK_TAG = "ringtask:AlarmReceiverWakeLock"
@@ -60,9 +60,13 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-        val localWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG + ":local")
+        val localWakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+            WAKELOCK_TAG + ":local"
+        )
         try {
             localWakeLock.acquire(WAKELOCK_TIMEOUT_MS)
+            Log.d(TAG, "Local WakeLock acquired — triggering FakeCallTrigger")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire local wakelock", e)
         }
@@ -71,6 +75,18 @@ class AlarmReceiver : BroadcastReceiver() {
         Thread {
             try {
                 FakeCallTrigger.fire(context, payload)
+                
+                // If this is a loop task, schedule the next occurrence
+                try {
+                    val json = org.json.JSONObject(payload)
+                    val taskId = json.optString("taskId")
+                    if (taskId.isNotEmpty()) {
+                        LoopManager.rescheduleNext(context, taskId)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error checking for loop task rescheduling", e)
+                }
+
             } catch (e: Exception) {
                 Log.e(TAG, "FakeCallTrigger.fire() failed", e)
             } finally {

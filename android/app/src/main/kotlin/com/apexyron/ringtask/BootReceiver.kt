@@ -1,4 +1,4 @@
-package com.example.ringtask
+package com.apexyron.ringtask
 
 import android.app.AlarmManager
 import android.app.PendingIntent
@@ -79,7 +79,17 @@ class BootReceiver : BroadcastReceiver() {
                 try {
                     AlarmReceiver.acquireWakeLockStatic(context)
                     FakeCallTrigger.fire(context, payload)
-                    prefs.edit().remove(tag).apply()
+                    
+                    // If it's a loop task, reschedule the next one.
+                    // Otherwise remove it as usual.
+                    val json = org.json.JSONObject(payload)
+                    val taskId = json.optString("taskId")
+                    if (taskId.isNotEmpty()) {
+                        LoopManager.rescheduleNext(context, taskId)
+                    } else {
+                        prefs.edit().remove(tag).apply()
+                    }
+
                     firedMissed++
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed firing missed alarm tag=$tag", e)
@@ -108,9 +118,19 @@ class BootReceiver : BroadcastReceiver() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
 
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerAtMillis,
+                // ✅ SWITCH: Use setAlarmClock for consistency and reliability
+                val showIntent = Intent(context, MainActivity::class.java).apply {
+                    this.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                val showPendingIntent = PendingIntent.getActivity(
+                    context,
+                    requestCode,
+                    showIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
+                alarmManager.setAlarmClock(
+                    AlarmManager.AlarmClockInfo(triggerAtMillis, showPendingIntent),
                     pendingIntent
                 )
 

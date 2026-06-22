@@ -1,27 +1,17 @@
 // lib/services/scheduler/alarm_scheduler.dart
 import 'dart:convert';
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:ringtask/utils/logger.dart';
+
+import 'package:ringtask/data/models/loop_model.dart';
 
 class AlarmScheduler {
   static const _channel = MethodChannel('ringtask/workmanager');
 
-  static Future<void> initialize() async {
-    // ✅ No setMethodCallHandler here — FakeCallService.initialize() already
-    // owns the handler for 'navigateToFakeCall' on this channel. Setting a
-    // second handler here would silently overwrite it and break navigation.
-
-    // ✅ Tell Android the Flutter side is live. MainActivity flushes any
-    // payload cached during a cold start via the flutterReady handler,
-    // which then invokes 'navigateToFakeCall' → FakeCallService.
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      _channel.invokeMethod<void>('flutterReady').catchError((e) {
-        AppLogger.warning('flutterReady invoke failed: $e');
-      });
-    });
-
-    AppLogger.info('✅ AlarmScheduler initialized successfully');
+  Future<void> initialize() async {
+    // flutterReady is sent by FakeCallService.initialize() after the
+    // method call handler is registered — do not call it here.
+    AppLogger.info('AlarmScheduler initialized successfully');
   }
 
   Future<bool> scheduleCall({
@@ -30,32 +20,38 @@ class AlarmScheduler {
     required String taskDescription,
     required DateTime scheduledTime,
     String callerName = 'RingTask Reminder',
+    String? ringtonePath,
+    RecurrenceType? recurrence,
   }) async {
     try {
       final delay = scheduledTime.difference(DateTime.now());
       if (delay.isNegative) {
-        AppLogger.warning('⚠️ Cannot schedule call in past: $scheduledTime');
+        AppLogger.warning('Cannot schedule call in past: $scheduledTime');
         return false;
       }
 
-      // Cancel only this specific task before rescheduling
+      // Cancel any existing alarm for this task before rescheduling
       await _channel.invokeMethod('cancelFakeCall', {'tag': taskId});
 
       await _channel.invokeMethod('scheduleFakeCall', {
         'delayMillis': delay.inMilliseconds,
+        'triggerAtMillis': scheduledTime.millisecondsSinceEpoch,
         'tag': taskId,
         'payload': jsonEncode({
           'taskId': taskId,
           'title': taskTitle,
           'description': taskDescription,
+          'scheduledTime': scheduledTime.toIso8601String(),
           'callerName': callerName,
+          'ringtonePath': ringtonePath,
+          'recurrence': recurrence != null ? recurrenceToString(recurrence) : null,
         }),
       });
 
-      AppLogger.info('✅ Call scheduled: $taskTitle in ${delay.inMinutes}min');
+      AppLogger.info('Call scheduled: $taskTitle in ${delay.inMinutes}min');
       return true;
     } catch (e, s) {
-      AppLogger.error('❌ Schedule failed: $e', stackTrace: s);
+      AppLogger.error('Schedule failed: $e', stackTrace: s);
       return false;
     }
   }
@@ -63,20 +59,22 @@ class AlarmScheduler {
   Future<bool> cancelScheduledCall(String taskId) async {
     try {
       await _channel.invokeMethod('cancelFakeCall', {'tag': taskId});
-      AppLogger.info('🗑️ Cancelled call: $taskId');
+      AppLogger.info('Cancelled call: $taskId');
       return true;
     } catch (e, s) {
-      AppLogger.error('❌ Cancel failed: $e', stackTrace: s);
+      AppLogger.error('Cancel failed: $e', stackTrace: s);
       return false;
     }
   }
 
   Future<void> cancelAllFakeCalls() async {
+    // ⚠️ Only cancels the default-tag alarm — task-specific alarms
+    // must be cancelled individually via cancelScheduledCall(taskId)
     try {
       await _channel.invokeMethod('cancelFakeCall', {'tag': 'fakeCall'});
-      AppLogger.info('🗑️ All scheduled calls cleared');
+      AppLogger.info('All scheduled calls cleared');
     } catch (e, s) {
-      AppLogger.error('❌ Cancel all failed: $e', stackTrace: s);
+      AppLogger.error('Cancel all failed: $e', stackTrace: s);
     }
   }
 
@@ -86,6 +84,7 @@ class AlarmScheduler {
     required String taskDescription,
     required DateTime newScheduledTime,
     String callerName = 'RingTask Reminder',
+    String? ringtonePath,
   }) async {
     await cancelScheduledCall(taskId);
     return scheduleCall(
@@ -94,6 +93,7 @@ class AlarmScheduler {
       taskDescription: taskDescription,
       scheduledTime: newScheduledTime,
       callerName: callerName,
+      ringtonePath: ringtonePath,
     );
   }
 }

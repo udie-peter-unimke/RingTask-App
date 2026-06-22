@@ -1,4 +1,3 @@
-// lib/blocs/task/task_state.dart
 import 'package:equatable/equatable.dart';
 import 'package:ringtask/data/models/task_model.dart';
 
@@ -27,9 +26,8 @@ class TaskInitial extends TaskState {
   const TaskInitial() : super();
 
   @override
-  // ✅ FIXED: If tasks are provided, transition to TaskLoaded instead of ignoring
   TaskState copyWith({List<TaskModel>? tasks, bool? isLoading, String? error}) {
-    if (tasks != null && tasks.isNotEmpty) return TaskLoaded(tasks);
+    // Keep initial state pure. State transitions belong in the Bloc handlers.
     return const TaskInitial();
   }
 
@@ -54,7 +52,7 @@ class TaskLoaded extends TaskState {
 
   @override
   TaskState copyWith({List<TaskModel>? tasks, bool? isLoading, String? error}) {
-    if (error != null) return TaskError(error, tasks: tasks ?? this.tasks);
+    // ✅ FIXED: Return TaskLoaded explicitly to preserve structural type checking
     return TaskLoaded(tasks ?? this.tasks);
   }
 
@@ -129,17 +127,14 @@ class TaskDeleted extends TaskState {
   String toString() => 'TaskDeleted { id: $deletedTaskId, tasks: ${tasks.length} }';
 }
 
-/// ✅ FIXED: Removed redundant `message` field — use inherited `error` instead
 class TaskError extends TaskState {
-  // ✅ Expose error as a getter for convenience — no duplicate storage
   String get message => error ?? 'Unknown error';
 
-  const TaskError(String message, {super.tasks})
-      : super(error: message);
+  const TaskError(String message, {super.tasks}) : super(error: message);
 
   @override
-  // ✅ FIXED: renamed param to `errorMessage` to avoid shadowing inherited `error`
   TaskState copyWith({List<TaskModel>? tasks, bool? isLoading, String? error}) {
+    // ✅ FIXED: Return TaskError to keep properties aligned without type pollution
     return TaskError(error ?? message, tasks: tasks ?? this.tasks);
   }
 

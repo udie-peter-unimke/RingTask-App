@@ -1,4 +1,4 @@
-package com.example.ringtask
+package com.apexyron.ringtask
 
 import org.junit.Test
 

@@ -1,9 +1,9 @@
+// lib/blocs/fake_call/fake_call_bloc.dart
 import 'dart:async';
-
+import 'package:bloc_concurrency/bloc_concurrency.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ringtask/blocs/fake_call/fake_call_event.dart';
 import 'package:ringtask/blocs/fake_call/fake_call_state.dart';
-//import 'package:ringtask/data/models/task_model.dart';
 import 'package:ringtask/repositories/fake_call_repository.dart';
 import 'package:ringtask/repositories/task_repository.dart';
 import 'package:ringtask/services/firebase/tts_service.dart';
@@ -26,7 +26,10 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
         _userId = userId,
         super(FakeCallState.initial()) {
 
-    on<TriggerFakeCallEvent>(_onTriggerFakeCall);
+    on<TriggerFakeCallEvent>(
+      _onTriggerFakeCall,
+      transformer: droppable(),
+    );
     on<AnswerFakeCallEvent>(_onAnswerFakeCall);
     on<DeclineFakeCallEvent>(_onDeclineFakeCall);
     on<MarkTaskCompletedEvent>(_onMarkTaskCompleted);
@@ -34,27 +37,33 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     on<ResetFakeCallEvent>(_onReset);
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // 1. Task due → WorkManager triggers → Show fake call + ring
-  // ──────────────────────────────────────────────────────────────
+  // ── 1. Task due → show fake call ──────────────────────────────────────────
   Future<void> _onTriggerFakeCall(
       TriggerFakeCallEvent event,
       Emitter<FakeCallState> emit,
       ) async {
     final task = event.task;
-
-    AppLogger.info('Fake call triggered for task: ${task.title} (ID: ${task.id})');
+    AppLogger.info('Fake call triggered: ${task.title} (${task.id})');
 
     emit(state.copyWith(
-      status: FakeCallStatus.ringing,
+      status: FakeCallStatus.loading,
       currentTask: task,
       callStartTime: DateTime.now(),
     ));
 
-    final success = await _fakeCallRepository.initiateFakeCall(task);
-
-    if (!success) {
-      AppLogger.error('Failed to initiate fake call');
+    try {
+      final success = await _fakeCallRepository.initiateFakeCall(task);
+      if (success) {
+        emit(state.copyWith(status: FakeCallStatus.ringing));
+      } else {
+        AppLogger.error('initiateFakeCall returned false');
+        emit(state.copyWith(
+          status: FakeCallStatus.error,
+          errorMessage: 'Could not start reminder call',
+        ));
+      }
+    } catch (e) {
+      AppLogger.error('initiateFakeCall threw: $e');
       emit(state.copyWith(
         status: FakeCallStatus.error,
         errorMessage: 'Could not start reminder call',
@@ -62,9 +71,7 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // 2. User answers → Speak the task aloud
-  // ──────────────────────────────────────────────────────────────
+  // ── 2. User answers → move to tts screen ──────────────────────────────────
   Future<void> _onAnswerFakeCall(
       AnswerFakeCallEvent event,
       Emitter<FakeCallState> emit,
@@ -72,18 +79,13 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     final task = state.currentTask;
     if (task == null) return;
 
-    AppLogger.info('User answered fake call – reading task aloud');
-
-    emit(state.copyWith(status: FakeCallStatus.reading));
-
-    await _fakeCallRepository.readTaskDetails(task);
-
+    AppLogger.info('Call answered — moving to tts screen');
     emit(state.copyWith(status: FakeCallStatus.answered));
+    // TTS reading is now handled by TtsNotificationScreen to avoid
+    // audio focus conflicts during the navigation transition.
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // 3. User declines call
-  // ──────────────────────────────────────────────────────────────
+  // ── 3. User declines ──────────────────────────────────────────────────────
   Future<void> _onDeclineFakeCall(
       DeclineFakeCallEvent event,
       Emitter<FakeCallState> emit,
@@ -91,9 +93,7 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     await _cleanupAndEnd(emit, FakeCallStatus.declined);
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // 4. Mark task as completed
-  // ──────────────────────────────────────────────────────────────
+  // ── 4. Mark task completed ────────────────────────────────────────────────
   Future<void> _onMarkTaskCompleted(
       MarkTaskCompletedEvent event,
       Emitter<FakeCallState> emit,
@@ -101,13 +101,20 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     final taskId = state.currentTask?.id;
     if (taskId == null) return;
 
-    AppLogger.info('Marking task as completed: $taskId');
+    AppLogger.info('Marking task completed: $taskId');
 
-    final success = await _taskRepository.markTaskAsCompleted(_userId, taskId);
-
-    if (success) {
-      await _cleanupAndEnd(emit, FakeCallStatus.completed);
-    } else {
+    try {
+      final success = await _taskRepository.markTaskAsCompleted(_userId, taskId);
+      if (success) {
+        await _cleanupAndEnd(emit, FakeCallStatus.completed);
+      } else {
+        emit(state.copyWith(
+          status: FakeCallStatus.error,
+          errorMessage: 'Failed to mark task as completed',
+        ));
+      }
+    } catch (e) {
+      AppLogger.error('markTaskAsCompleted threw: $e');
       emit(state.copyWith(
         status: FakeCallStatus.error,
         errorMessage: 'Failed to mark task as completed',
@@ -115,19 +122,32 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // 5. Snooze (optional – you can expand later)
-  // ──────────────────────────────────────────────────────────────
+  // ── 5. Snooze ─────────────────────────────────────────────────────────────
   Future<void> _onSnoozeTask(
       SnoozeTaskEvent event,
       Emitter<FakeCallState> emit,
       ) async {
-    await _cleanupAndEnd(emit, FakeCallStatus.snoozed);
+    final task = state.currentTask;
+    if (task == null) return;
+
+    try {
+      final snoozeUntil = DateTime.now().add(event.snoozeDuration);
+      await _fakeCallRepository.snoozeFakeCall(
+        task: task,
+        until: snoozeUntil,
+      );
+      AppLogger.info('Task snoozed until $snoozeUntil');
+      await _cleanupAndEnd(emit, FakeCallStatus.snoozed);
+    } catch (e) {
+      AppLogger.error('Snooze failed: $e');
+      emit(state.copyWith(
+        status: FakeCallStatus.error,
+        errorMessage: 'Could not snooze reminder',
+      ));
+    }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // Helper: Stop everything and reset
-  // ──────────────────────────────────────────────────────────────
+  // ── Helper: stop audio + end call ─────────────────────────────────────────
   Future<void> _cleanupAndEnd(
       Emitter<FakeCallState> emit,
       FakeCallStatus endStatus,
@@ -139,25 +159,31 @@ class FakeCallBloc extends Bloc<FakeCallEvent, FakeCallState> {
         ? DateTime.now().difference(state.callStartTime!)
         : null;
 
-    emit(state.copyWith(
-      status: endStatus,
-      callDuration: duration,
-    ));
+    if (!isClosed) {
+      emit(state.copyWith(
+        status: endStatus,
+        callDuration: duration,
+      ));
+    }
 
+    // Wait safely before resetting to initial state
     await Future.delayed(const Duration(seconds: 1));
-    add(const ResetFakeCallEvent());
+    if (!isClosed) {
+      emit(FakeCallState.initial());
+    }
   }
 
-  // ──────────────────────────────────────────────────────────────
-  // Reset to idle
-  // ──────────────────────────────────────────────────────────────
+  // ── Reset to idle ──────────────────────────────────────────────────────────
   void _onReset(ResetFakeCallEvent event, Emitter<FakeCallState> emit) {
     emit(FakeCallState.initial());
   }
 
   @override
   Future<void> close() async {
-    await _ttsService.stop();
+    // Note: Do NOT call _ttsService.stop() here. 
+    // This bloc is disposed during navigation from FakeCallScreen to 
+    // TtsNotificationScreen. Stopping TTS here would kill the speech 
+    // that TtsNotificationScreen just started in its initState.
     return super.close();
   }
 }

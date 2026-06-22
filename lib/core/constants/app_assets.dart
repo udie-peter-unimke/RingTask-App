@@ -7,13 +7,17 @@ class AppAssets {
 
   // =====================================================
   // IMAGES
-  // =====================================================
-  static const String logo = 'assets/images/logo.png';
-  static const String splashBackground = 'assets/images/splash_bg.jpg';
+  // app_asset.dart
+// =====================================================
 
-  static const String onboarding1 = 'assets/images/onboarding_1.png';
-  static const String onboarding2 = 'assets/images/onboarding_2.png';
-  static const String onboarding3 = 'assets/images/onboarding_3.png';
+  static const String splashBackground = 'assets/images/splash_bg.jpg';
+  // Onboarding illustrations
+  static const String onboarding1 = 'assets/images/b1.jpeg'; // Phone mockup with floating task icons
+  static const String onboarding2 = 'assets/images/b2.jpeg'; // 3D character with phone and floating reminder icons
+  static const String onboarding3 = 'assets/images/b3.jpeg'; // Phone showing incoming call screen
+  static const String onboarding4 = 'assets/images/b4.jpeg'; // 3D character at desk with laptop
+  static const String onboarding5 = 'assets/images/b5.jpeg'; // 3D character with headphones on phone call
+  static const String onboarding6 = 'assets/images/b6.jpeg'; // Trophy with RingTask logo
 
   // Task-related images
   static const String taskCompleted = 'assets/images/task_completed.png';

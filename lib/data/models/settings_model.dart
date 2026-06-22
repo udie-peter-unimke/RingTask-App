@@ -73,7 +73,7 @@ class SettingsModel extends Equatable {
     this.countryCode,
     this.firstTimeUser = true,
     this.lastUpdated,
-    this.themeMode = 'system',
+    this.themeMode = 'light',
     this.primaryColor,
     this.useMaterialYou = true,
     this.fontFamily = 'default',
@@ -424,7 +424,7 @@ class SettingsModel extends Equatable {
     lastUpdated: json['lastUpdated'] != null
         ? DateTime.fromMillisecondsSinceEpoch(json['lastUpdated'] as int)
         : null,
-    themeMode: json['themeMode'] as String? ?? 'system',
+    themeMode: json['themeMode'] as String? ?? 'light',
     primaryColor: json['primaryColor'] as String?,
     useMaterialYou: json['useMaterialYou'] as bool? ?? true,
     fontFamily: json['fontFamily'] as String? ?? 'default',

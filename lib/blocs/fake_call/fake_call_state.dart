@@ -4,7 +4,8 @@ import 'package:ringtask/data/models/task_model.dart';
 /// Enum to represent the current state of the fake call
 enum FakeCallStatus {
   idle,           // No fake call active
-  ringing,        // Fake call is ringing (incoming call screen)
+  ringing,
+  loading,// Fake call is ringing (incoming call screen)
   answered,       // User answered, call is active
   reading,        // TTS is reading the task
   completed,      // Call ended normally
@@ -40,7 +41,9 @@ class FakeCallState extends Equatable {
   bool get isCallActive =>
       status == FakeCallStatus.ringing ||
           status == FakeCallStatus.answered ||
+          status == FakeCallStatus.loading ||
           status == FakeCallStatus.reading;
+
 
   bool get isRinging => status == FakeCallStatus.ringing;
   bool get isAnswered => status == FakeCallStatus.answered;
@@ -50,6 +53,7 @@ class FakeCallState extends Equatable {
   bool get isSnoozed => status == FakeCallStatus.snoozed;
   bool get hasError => status == FakeCallStatus.error;
   bool get isIdle => status == FakeCallStatus.idle;
+  bool get isLoading => status == FakeCallStatus.loading;
 
   /// Copy with method for state updates
   FakeCallState copyWith({

@@ -1,4 +1,4 @@
-package com.example.ringtask
+package com.apexyron.ringtask
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -37,9 +37,18 @@ object FakeCallTrigger {
             ensureNotificationChannel(context)
             postCallNotification(context, callerName, title, payload)
 
-            // ✅ Force the Activity to launch automatically
-            // This works from the background if "Display over other apps" is granted.
-            val intent = Intent(context, MainActivity::class.java).apply {
+            // ✅ Wake up the screen if it's off
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            val screenWakeLock = pm?.newWakeLock(
+                android.os.PowerManager.FULL_WAKE_LOCK or
+                        android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                        android.os.PowerManager.ON_AFTER_RELEASE,
+                "ringtask:FakeCallTrigger:WakeScreen"
+            )
+            screenWakeLock?.acquire(5000L) // 5 seconds is enough to trigger Activity launch
+
+            // ✅ Launch FakeCallActivity
+            val intent = Intent(context, FakeCallActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP
                 putExtra(MainActivity.EXTRA_IS_FAKE_CALL, true)
@@ -74,19 +83,14 @@ object FakeCallTrigger {
         // This is a one-time migration, not a per-alarm operation.
         manager.deleteNotificationChannel("fake_call_channel")  // v1 cleanup only
 
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Fake Incoming Call",
-            NotificationManager.IMPORTANCE_HIGH
-            // IMPORTANCE_MAX is functionally identical to IMPORTANCE_HIGH for
-            // full-screen intents. MAX caused some OEMs (Xiaomi, Oppo) to
-            // reclassify the channel as spam after 2-3 firings and block it.
-        ).apply {
-            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
-            setSound(null, null)
-            enableVibration(false)
-            setBypassDnd(true)
-        }
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Fake Incoming Call",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
+            }
 
         manager.createNotificationChannel(channel)
         channelCreated = true
@@ -102,8 +106,8 @@ object FakeCallTrigger {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val notificationId = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
-        // ✅ Launch MainActivity directly instead of FakeCallActivity
-        val fullScreenIntent = Intent(context, MainActivity::class.java).apply {
+        // ✅ Launch FakeCallActivity directly instead of MainActivity
+        val fullScreenIntent = Intent(context, FakeCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                     Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(MainActivity.EXTRA_IS_FAKE_CALL, true)
@@ -118,7 +122,7 @@ object FakeCallTrigger {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.mipmap.launcher_icon)
             .setContentTitle(callerName)
             .setContentText("Incoming Call – $title")
             .setPriority(NotificationCompat.PRIORITY_MAX)

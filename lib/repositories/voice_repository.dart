@@ -8,6 +8,7 @@ abstract class IVoiceRepository {
   Future<bool> isVoiceAvailable();
   Future<bool> checkMicrophonePermission();
   Future<bool> requestMicrophonePermission();
+  Future<bool> isMicrophonePermissionPermanentlyDenied();
   Future<void> startListening({
     required Function(String) onResult,
     required Function(String) onError,
@@ -15,6 +16,7 @@ abstract class IVoiceRepository {
   });
   Future<void> stopListening();
   Future<void> cancelListening();
+  Future<void> openAppSettings();
 }
 
 class VoiceRepository implements IVoiceRepository {
@@ -64,6 +66,16 @@ class VoiceRepository implements IVoiceRepository {
       return permissionGranted;
     } catch (e) {
       AppLogger.error('Error requesting microphone permission: $e');
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> isMicrophonePermissionPermanentlyDenied() async {
+    try {
+      return await permissionService.isMicrophonePermissionPermanentlyDenied();
+    } catch (e) {
+      AppLogger.error('Error checking permanent denial: $e');
       return false;
     }
   }
@@ -139,4 +151,15 @@ class VoiceRepository implements IVoiceRepository {
       rethrow;
     }
   }
-}// TODO Implement this library.
+
+  /// Open app settings
+  @override
+  Future<void> openAppSettings() async {
+    try {
+      await permissionService.openAppSettings();
+    } catch (e) {
+      AppLogger.error('Error opening app settings in repository: $e');
+      rethrow;
+    }
+  }
+}

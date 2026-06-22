@@ -13,6 +13,10 @@ class TaskModel extends Equatable {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  // ── Sync metadata (local-only, never sent to Firestore) ──────────────────
+  final bool isSynced;
+  final bool isDeletedLocally;
+
   const TaskModel({
     required this.id,
     required this.title,
@@ -23,6 +27,8 @@ class TaskModel extends Equatable {
     this.isUrgent = false,
     this.createdAt,
     this.updatedAt,
+    this.isSynced = false,
+    this.isDeletedLocally = false,
   });
 
   TaskModel copyWith({
@@ -36,21 +42,30 @@ class TaskModel extends Equatable {
     DateTime? createdAt,
     DateTime? updatedAt,
     bool clearScheduledTime = false,
+    bool? isSynced,
+    bool? isDeletedLocally,
   }) {
     return TaskModel(
       id: id ?? this.id,
       title: title ?? this.title,
       description: description ?? this.description,
-      scheduledTime: clearScheduledTime ? null : (scheduledTime ?? this.scheduledTime),
+      scheduledTime:
+      clearScheduledTime ? null : (scheduledTime ?? this.scheduledTime),
       isCompleted: isCompleted ?? this.isCompleted,
       isReminderEnabled: isReminderEnabled ?? this.isReminderEnabled,
       isUrgent: isUrgent ?? this.isUrgent,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      isSynced: isSynced ?? this.isSynced,
+      isDeletedLocally: isDeletedLocally ?? this.isDeletedLocally,
     );
   }
 
-  /// 🔥 PERFECT Firestore parsing - ZERO warnings
+  // ── Firestore ─────────────────────────────────────────────────────────────
+
+  /// Parses a Firestore document into a TaskModel.
+  /// isSynced is set to true here because data coming from Firestore is, by
+  /// definition, already in sync. isDeletedLocally defaults to false.
   factory TaskModel.fromFirestore(String docId, Map<String, dynamic> data) {
     return TaskModel(
       id: docId,
@@ -62,20 +77,31 @@ class TaskModel extends Equatable {
       isUrgent: data['isUrgent'] as bool? ?? false,
       createdAt: _parseDateTime(data['createdAt']),
       updatedAt: _parseDateTime(data['updatedAt']),
+      isSynced: true,         // freshly fetched → already synced
+      isDeletedLocally: false,
     );
   }
 
-  /// 🔥 Single robust DateTime parser
-  static DateTime? _parseDateTime(dynamic value) {
-    if (value == null) return null;
-
-    // Direct type checks - NO switch warnings
-    if (value is Timestamp) return value.toDate();
-    if (value is DateTime) return value;
-    if (value is String) return DateTime.tryParse(value);
-    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
-    return null;
+  /// Sends to Firestore. Sync metadata is intentionally excluded — it is
+  /// local state only and must never pollute the remote document.
+  Map<String, dynamic> toFirestore() {
+    return {
+      'title': title.trim(),
+      'description': description.trim(),
+      'scheduledTime':
+      scheduledTime != null ? Timestamp.fromDate(scheduledTime!) : null,
+      'isCompleted': isCompleted,
+      'isReminderEnabled': isReminderEnabled,
+      'isUrgent': isUrgent,
+      'createdAt': createdAt != null
+          ? Timestamp.fromDate(createdAt!)
+          : FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      // isSynced and isDeletedLocally are deliberately omitted
+    };
   }
+
+  // ── Cache / SharedPreferences (via CacheManager) ──────────────────────────
 
   factory TaskModel.fromJson(Map<String, dynamic> json) {
     return TaskModel(
@@ -88,9 +114,14 @@ class TaskModel extends Equatable {
       isUrgent: json['isUrgent'] as bool? ?? false,
       createdAt: _parseDateTime(json['createdAt']),
       updatedAt: _parseDateTime(json['updatedAt']),
+      isSynced: json['isSynced'] as bool? ?? false,
+      isDeletedLocally: json['isDeletedLocally'] as bool? ?? false,
     );
   }
 
+  /// Persisted to SharedPreferences via CacheManager.
+  /// Sync metadata IS included here — it is the source of truth for local
+  /// pending-sync and soft-delete state.
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -98,22 +129,16 @@ class TaskModel extends Equatable {
       'description': description,
       'scheduledTime': scheduledTime?.toIso8601String(),
       'isCompleted': isCompleted,
-    };
-  }
-
-
-  Map<String, dynamic> toFirestore() {
-    return {
-      'title': title.trim(),
-      'description': description.trim(),
-      'scheduledTime': scheduledTime != null ? Timestamp.fromDate(scheduledTime!) : null,
-      'isCompleted': isCompleted,
       'isReminderEnabled': isReminderEnabled,
       'isUrgent': isUrgent,
-      'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': createdAt?.toIso8601String(),
+      'updatedAt': updatedAt?.toIso8601String(),
+      'isSynced': isSynced,
+      'isDeletedLocally': isDeletedLocally,
     };
   }
+
+  // ── WorkManager ───────────────────────────────────────────────────────────
 
   Map<String, dynamic> toJsonForWorkManager() {
     return {
@@ -127,48 +152,95 @@ class TaskModel extends Equatable {
     };
   }
 
-  // 🔥 CLEAN DISPLAY METHODS
-  String get displayScheduledTime {
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /// Single robust DateTime parser — handles Timestamp, DateTime, ISO String,
+  /// and epoch int without any switch-statement warnings.
+  static DateTime? _parseDateTime(dynamic value) {
+    if (value == null) return null;
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    return null;
+  }
+
+  // ── Display ───────────────────────────────────────────────────────────────
+
+  String displayScheduledTimeFormatted({bool use24HourFormat = true}) {
     if (scheduledTime == null) return 'No due date';
 
     final now = DateTime.now();
     final taskDate = scheduledTime!;
+    final timeFormat = use24HourFormat ? 'HH:mm' : 'h:mm a';
 
-    if (_isSameDay(taskDate, now)) return 'Today ${DateFormat('HH:mm').format(taskDate)}';
-    if (_isSameDay(taskDate, now.add(const Duration(days: 1)))) return 'Tomorrow ${DateFormat('HH:mm').format(taskDate)}';
-    if (taskDate.isBefore(now)) return 'Overdue • ${DateFormat('MMM d').format(taskDate)}';
-    if (taskDate.difference(now).inDays <= 7) return DateFormat('EEE, MMM d').format(taskDate);
-
-    return DateFormat('MMM d, y').format(taskDate);
+    if (_isSameDay(taskDate, now)) {
+      return 'Today ${DateFormat(timeFormat).format(taskDate)}';
+    }
+    if (_isSameDay(taskDate, now.add(const Duration(days: 1)))) {
+      return 'Tomorrow ${DateFormat(timeFormat).format(taskDate)}';
+    }
+    if (taskDate.isBefore(now)) {
+      return 'Overdue • ${DateFormat('MMM d').format(taskDate)}';
+    }
+    if (taskDate.difference(now).inDays <= 7) {
+      return '${DateFormat('EEE, MMM d').format(taskDate)} ${DateFormat(timeFormat).format(taskDate)}';
+    }
+    return '${DateFormat('MMM d, y').format(taskDate)} ${DateFormat(timeFormat).format(taskDate)}';
   }
+
+  @Deprecated('Use displayScheduledTimeFormatted instead')
+  String get displayScheduledTime => displayScheduledTimeFormatted();
 
   String get timeUntilString {
     final duration = timeUntilTask;
     if (duration == null) return '';
-
     if (duration.isNegative) {
       final abs = duration.abs();
       return abs.inDays > 0 ? '${abs.inDays}d overdue' : 'Overdue';
     }
-
-    return duration.inDays > 0 ? 'in ${duration.inDays}d' :
-    duration.inHours > 0 ? 'in ${duration.inHours}h' : 'Soon';
+    return duration.inDays > 0
+        ? 'in ${duration.inDays}d'
+        : duration.inHours > 0
+        ? 'in ${duration.inHours}h'
+        : 'Soon';
   }
 
-  bool get isOverdue => scheduledTime != null && scheduledTime!.isBefore(DateTime.now()) && !isCompleted;
-  bool get isDueToday => scheduledTime != null && _isSameDay(scheduledTime!, DateTime.now());
+  bool get isOverdue =>
+      scheduledTime != null &&
+          scheduledTime!.isBefore(DateTime.now()) &&
+          !isCompleted;
+
+  bool get isDueToday =>
+      scheduledTime != null && _isSameDay(scheduledTime!, DateTime.now());
+
   Duration? get timeUntilTask => scheduledTime?.difference(DateTime.now());
+
   bool get isValid => id.isNotEmpty && title.trim().isNotEmpty;
 
   bool _isSameDay(DateTime d1, DateTime d2) =>
       d1.year == d2.year && d1.month == d2.month && d1.day == d2.day;
 
+  // ── Equatable ─────────────────────────────────────────────────────────────
+
   @override
   List<Object?> get props => [
-    id, title, description, scheduledTime, isCompleted,
-    isReminderEnabled, isUrgent, createdAt, updatedAt
+    id,
+    title,
+    description,
+    scheduledTime,
+    isCompleted,
+    isReminderEnabled,
+    isUrgent,
+    createdAt,
+    updatedAt,
+    isSynced,
+    isDeletedLocally,
   ];
 
   @override
-  String toString() => 'Task(id: $id, title: "$title", due: $displayScheduledTime, urgent: $isUrgent, done: $isCompleted)';
+  String toString() =>
+      'Task(id: $id, title: "$title", due: $displayScheduledTime, '
+          'urgent: $isUrgent, done: $isCompleted, '
+          'synced: $isSynced, deletedLocally: $isDeletedLocally)';
 }

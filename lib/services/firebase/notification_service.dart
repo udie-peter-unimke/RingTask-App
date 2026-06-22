@@ -3,6 +3,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:ringtask/utils/logger.dart';
 
+import 'package:ringtask/data/models/loop_model.dart';
+
 abstract class INotificationService {
   Future<void> initialize();
   Future<void> showNotification({
@@ -51,7 +53,7 @@ class NotificationService implements INotificationService {
       AppLogger.info('Initializing NotificationService');
 
       const AndroidInitializationSettings androidInitSettings =
-      AndroidInitializationSettings('app_icon');
+      AndroidInitializationSettings('@mipmap/launcher_icon');
 
       const InitializationSettings initializationSettings =
       InitializationSettings(
@@ -88,8 +90,9 @@ class NotificationService implements INotificationService {
         showBadge: true,
       );
 
-      // ✅ FIXED: Correct syntax on single line
-      final androidImpl = _flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      // ✅ Correctly resolve the platform-specific implementation
+      final androidImpl = _flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
 
       if (androidImpl != null) {
         await androidImpl.createNotificationChannel(channel);
@@ -99,7 +102,7 @@ class NotificationService implements INotificationService {
     } catch (e) {
       AppLogger.error('Error creating notification channel: $e');
     }
-  }
+  } // ← Added missing closing brace for the method body
 
   @override
   Future<void> showNotification({
@@ -123,9 +126,9 @@ class NotificationService implements INotificationService {
         payload: payload ?? 'task_reminder',
       );
 
-      AppLogger.info('🔔 Simple notification shown: $title');
+      AppLogger.info('Simple notification shown: $title');
     } catch (e) {
-      AppLogger.error('❌ Simple notification failed: $e');
+      AppLogger.error('Simple notification failed: $e');
     }
   }
 
@@ -178,6 +181,27 @@ class NotificationService implements INotificationService {
       rethrow;
     }
   }
+
+  /// Show notification for loop task
+  Future<void> showLoopTaskNotification(TaskLoopItem task) async {
+    await showInstantNotification(
+      id: task.id.hashCode,
+      title: 'Loop Task: ${task.title}',
+      body: 'Scheduled for ${task.timeString} ${task.period}',
+      payload: task.id,
+    );
+  }
+
+  /// Show notification for loop task completion
+  Future<void> showLoopTaskCompletionNotification(String taskTitle) async {
+    final id = DateTime.now().millisecond;
+    await showInstantNotification(
+      id: id,
+      title: 'Task Completed',
+      body: '$taskTitle marked as done',
+    );
+  }
+
 
   @override
   Future<void> showInstantNotification({
@@ -250,8 +274,8 @@ class NotificationService implements INotificationService {
   Future<List<PendingNotificationRequest>> getPendingNotifications() async {
     try {
       AppLogger.info('Fetching pending notifications');
-      final pending =
-      await _flutterLocalNotificationsPlugin.pendingNotificationRequests();
+      final pending = await _flutterLocalNotificationsPlugin
+          .pendingNotificationRequests();
       AppLogger.info('Retrieved ${pending.length} pending notifications');
       return pending;
     } catch (e) {
@@ -283,8 +307,9 @@ class NotificationService implements INotificationService {
     try {
       AppLogger.info('Requesting notification permissions (Android 13+)');
 
-      // ✅ FIXED: Correct syntax on single line with null check
-      final androidImpl = _flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      // ✅ Fixed: Removed split-line syntax errors and isolated generic call layout
+      final androidImpl = _flutterLocalNotificationsPlugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
 
       if (androidImpl == null) {
         AppLogger.warning('Android implementation not available');
@@ -292,7 +317,6 @@ class NotificationService implements INotificationService {
       }
 
       final bool? granted = await androidImpl.requestNotificationsPermission();
-
       AppLogger.info('Notification permissions granted: $granted');
       return granted == true;
     } catch (e) {

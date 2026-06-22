@@ -24,8 +24,10 @@ class TtsLoading extends TtsState {
   String toString() => 'TtsLoading';
 }
 
-/// State when TTS is initialized and ready to use
-class TtsInitialized extends TtsState {
+/// Shared base for all states where TTS is ready to use.
+/// TtsInitialized, TtsSpeaking, and TtsPaused all extend this —
+/// gives TtsBloc a single typed return from _readyState.
+abstract class TtsReadyState extends TtsState {
   final bool isAvailable;
   final List<String> availableLanguages;
   final List<String> availableVoices;
@@ -35,7 +37,7 @@ class TtsInitialized extends TtsState {
   final double pitch;
   final double volume;
 
-  const TtsInitialized({
+  const TtsReadyState({
     required this.isAvailable,
     this.availableLanguages = const [],
     this.availableVoices = const [],
@@ -46,7 +48,34 @@ class TtsInitialized extends TtsState {
     this.volume = 1.0,
   });
 
-  /// Creates a copy of this state with updated values
+  /// Each subclass must implement copyWith so TtsBloc can update
+  /// individual fields without knowing the concrete type.
+  TtsReadyState copyWith({
+    bool? isAvailable,
+    List<String>? availableLanguages,
+    List<String>? availableVoices,
+    String? currentLanguage,
+    String? currentVoice,
+    double? rate,
+    double? pitch,
+    double? volume,
+  });
+}
+
+/// State when TTS is initialized and ready to use
+class TtsInitialized extends TtsReadyState {
+  const TtsInitialized({
+    required super.isAvailable,
+    super.availableLanguages,
+    super.availableVoices,
+    super.currentLanguage,
+    super.currentVoice,
+    super.rate,
+    super.pitch,
+    super.volume,
+  });
+
+  @override
   TtsInitialized copyWith({
     bool? isAvailable,
     List<String>? availableLanguages,
@@ -56,18 +85,17 @@ class TtsInitialized extends TtsState {
     double? rate,
     double? pitch,
     double? volume,
-  }) {
-    return TtsInitialized(
-      isAvailable: isAvailable ?? this.isAvailable,
-      availableLanguages: availableLanguages ?? this.availableLanguages,
-      availableVoices: availableVoices ?? this.availableVoices,
-      currentLanguage: currentLanguage ?? this.currentLanguage,
-      currentVoice: currentVoice ?? this.currentVoice,
-      rate: rate ?? this.rate,
-      pitch: pitch ?? this.pitch,
-      volume: volume ?? this.volume,
-    );
-  }
+  }) =>
+      TtsInitialized(
+        isAvailable: isAvailable ?? this.isAvailable,
+        availableLanguages: availableLanguages ?? this.availableLanguages,
+        availableVoices: availableVoices ?? this.availableVoices,
+        currentLanguage: currentLanguage ?? this.currentLanguage,
+        currentVoice: currentVoice ?? this.currentVoice,
+        rate: rate ?? this.rate,
+        pitch: pitch ?? this.pitch,
+        volume: volume ?? this.volume,
+      );
 
   @override
   List<Object?> get props => [
@@ -95,35 +123,27 @@ class TtsInitialized extends TtsState {
 }
 
 /// State when TTS is actively speaking
-class TtsSpeaking extends TtsState {
-  final bool isAvailable;
-  final List<String> availableLanguages;
-  final List<String> availableVoices;
-  final String currentLanguage;
-  final String? currentVoice;
-  final double rate;
-  final double pitch;
-  final double volume;
+class TtsSpeaking extends TtsReadyState {
   final String? currentText;
   final int? textLength;
   final DateTime startedAt;
 
   TtsSpeaking({
-    required this.isAvailable,
-    this.availableLanguages = const [],
-    this.availableVoices = const [],
-    this.currentLanguage = 'en-US',
-    this.currentVoice,
-    this.rate = 0.5,
-    this.pitch = 1.0,
-    this.volume = 1.0,
+    required super.isAvailable,
+    super.availableLanguages,
+    super.availableVoices,
+    super.currentLanguage,
+    super.currentVoice,
+    super.rate,
+    super.pitch,
+    super.volume,
     this.currentText,
     int? textLength,
     DateTime? startedAt,
   })  : textLength = textLength ?? currentText?.length,
         startedAt = startedAt ?? DateTime.now();
 
-  /// Creates a copy of this state with updated values
+  @override
   TtsSpeaking copyWith({
     bool? isAvailable,
     List<String>? availableLanguages,
@@ -136,21 +156,20 @@ class TtsSpeaking extends TtsState {
     String? currentText,
     int? textLength,
     DateTime? startedAt,
-  }) {
-    return TtsSpeaking(
-      isAvailable: isAvailable ?? this.isAvailable,
-      availableLanguages: availableLanguages ?? this.availableLanguages,
-      availableVoices: availableVoices ?? this.availableVoices,
-      currentLanguage: currentLanguage ?? this.currentLanguage,
-      currentVoice: currentVoice ?? this.currentVoice,
-      rate: rate ?? this.rate,
-      pitch: pitch ?? this.pitch,
-      volume: volume ?? this.volume,
-      currentText: currentText ?? this.currentText,
-      textLength: textLength ?? this.textLength,
-      startedAt: startedAt ?? this.startedAt,
-    );
-  }
+  }) =>
+      TtsSpeaking(
+        isAvailable: isAvailable ?? this.isAvailable,
+        availableLanguages: availableLanguages ?? this.availableLanguages,
+        availableVoices: availableVoices ?? this.availableVoices,
+        currentLanguage: currentLanguage ?? this.currentLanguage,
+        currentVoice: currentVoice ?? this.currentVoice,
+        rate: rate ?? this.rate,
+        pitch: pitch ?? this.pitch,
+        volume: volume ?? this.volume,
+        currentText: currentText ?? this.currentText,
+        textLength: textLength ?? this.textLength,
+        startedAt: startedAt ?? this.startedAt,
+      );
 
   @override
   List<Object?> get props => [
@@ -177,29 +196,21 @@ class TtsSpeaking extends TtsState {
 }
 
 /// State when speech is paused
-class TtsPaused extends TtsState {
-  final bool isAvailable;
-  final List<String> availableLanguages;
-  final List<String> availableVoices;
-  final String currentLanguage;
-  final String? currentVoice;
-  final double rate;
-  final double pitch;
-  final double volume;
+class TtsPaused extends TtsReadyState {
   final String? currentText;
   final int? textLength;
   final DateTime pausedAt;
   final Duration elapsedBeforePause;
 
   TtsPaused({
-    required this.isAvailable,
-    this.availableLanguages = const [],
-    this.availableVoices = const [],
-    this.currentLanguage = 'en-US',
-    this.currentVoice,
-    this.rate = 0.5,
-    this.pitch = 1.0,
-    this.volume = 1.0,
+    required super.isAvailable,
+    super.availableLanguages,
+    super.availableVoices,
+    super.currentLanguage,
+    super.currentVoice,
+    super.rate,
+    super.pitch,
+    super.volume,
     this.currentText,
     int? textLength,
     DateTime? pausedAt,
@@ -208,7 +219,7 @@ class TtsPaused extends TtsState {
         pausedAt = pausedAt ?? DateTime.now(),
         elapsedBeforePause = elapsedBeforePause ?? Duration.zero;
 
-  /// Creates a copy of this state with updated values
+  @override
   TtsPaused copyWith({
     bool? isAvailable,
     List<String>? availableLanguages,
@@ -222,22 +233,21 @@ class TtsPaused extends TtsState {
     int? textLength,
     DateTime? pausedAt,
     Duration? elapsedBeforePause,
-  }) {
-    return TtsPaused(
-      isAvailable: isAvailable ?? this.isAvailable,
-      availableLanguages: availableLanguages ?? this.availableLanguages,
-      availableVoices: availableVoices ?? this.availableVoices,
-      currentLanguage: currentLanguage ?? this.currentLanguage,
-      currentVoice: currentVoice ?? this.currentVoice,
-      rate: rate ?? this.rate,
-      pitch: pitch ?? this.pitch,
-      volume: volume ?? this.volume,
-      currentText: currentText ?? this.currentText,
-      textLength: textLength ?? this.textLength,
-      pausedAt: pausedAt ?? this.pausedAt,
-      elapsedBeforePause: elapsedBeforePause ?? this.elapsedBeforePause,
-    );
-  }
+  }) =>
+      TtsPaused(
+        isAvailable: isAvailable ?? this.isAvailable,
+        availableLanguages: availableLanguages ?? this.availableLanguages,
+        availableVoices: availableVoices ?? this.availableVoices,
+        currentLanguage: currentLanguage ?? this.currentLanguage,
+        currentVoice: currentVoice ?? this.currentVoice,
+        rate: rate ?? this.rate,
+        pitch: pitch ?? this.pitch,
+        volume: volume ?? this.volume,
+        currentText: currentText ?? this.currentText,
+        textLength: textLength ?? this.textLength,
+        pausedAt: pausedAt ?? this.pausedAt,
+        elapsedBeforePause: elapsedBeforePause ?? this.elapsedBeforePause,
+      );
 
   @override
   List<Object?> get props => [

@@ -4,7 +4,7 @@
 name: ringtask
 description: A virtual call reminder app that reads your tasks aloud.
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.0+3
 
 # ---------------------------------------------------------------------------
 # 🧠 SDK CONSTRAINTS
@@ -27,6 +27,7 @@ dependencies:
   cloud_firestore: ^6.1.0
   google_sign_in: ^7.2.0
   flutter_slidable: ^4.0.3
+  connectivity_plus: ^7.1.1
 
   # -------------------------------
   # 🧠 STATE MANAGEMENT & NAV
@@ -36,13 +37,15 @@ dependencies:
   go_router: ^17.0.0
   get_it: ^9.1.0
   file_picker: ^8.1.2
+  bloc_concurrency: ^0.3.0
+  bloc: ^9.2.1
 
   # -------------------------------
   # 🔔 FAKE CALL / BACKGROUND
   # -------------------------------
   flutter_local_notifications: ^21.0.0
 
-  wakelock_plus: ^1.4.0
+  #wakelock_plus: ^1.4.0
   vibration: ^3.1.4
   audioplayers: ^6.0.0
 
@@ -60,11 +63,12 @@ dependencies:
   shared_preferences: ^2.5.3
   path_provider: ^2.1.5
   timezone: ^0.11.0
-  device_info_plus: 12.4.0
+  device_info_plus: ^12.4.0
   android_intent_plus: ^6.0.0
   google_fonts: ^8.0.1
   intl: ^0.20.2
-  flutter_launcher_icons: ^0.14.4
+  table_calendar: ^3.1.2
+
 
 # ---------------------------------------------------------------------------
 # 🧪 DEV DEPENDENCIES (NO BUILD RUNNER)
@@ -73,10 +77,8 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
-# ---------------------------------------------------------------------------
-# 🖼️ ASSETS
-# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # 🖼️ ASSETS
 # ---------------------------------------------------------------------------
@@ -87,6 +89,12 @@ flutter:
     - assets/sounds/ringtone.mp3
     - assets/images/google_logo.png
     - assets/images/rt_final_icon.png
+    - assets/images/b1.jpeg
+    - assets/images/b2.jpeg
+    - assets/images/b3.jpeg
+    - assets/images/b4.jpeg
+    - assets/images/b5.jpeg
+    - assets/images/b6.jpeg
 
 # Move this all the way to the left!
 flutter_launcher_icons:

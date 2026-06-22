@@ -4,106 +4,166 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#0D0D0D">
+    android:background="#1E1E1E">
 
-    <!-- Caller avatar placeholder -->
-    <ImageView
-        android:id="@+id/ivCallerAvatar"
-        android:layout_width="120dp"
-        android:layout_height="120dp"
-        android:src="@mipmap/ic_launcher"
-        android:scaleType="centerCrop"
-        android:background="#1A1A2E"
+    <!-- Header / Instruction -->
+    <TextView
+        android:id="@+id/tvIncomingHeader"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Incoming Task Reminder"
+        android:textColor="#B3FFFFFF"
+        android:textSize="16sp"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintVertical_bias="0.2"
-        app:layout_constraintBottom_toBottomOf="parent"/>
+        android:layout_marginTop="60dp"/>
 
     <!-- Caller name -->
     <TextView
         android:id="@+id/tvCallerName"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="RingTask"
-        android:textColor="#FFFFFF"
-        android:textSize="32sp"
-        android:textStyle="bold"
-        android:fontFamily="sans-serif-light"
-        app:layout_constraintTop_toBottomOf="@id/ivCallerAvatar"
+        android:text="RingTask Reminder"
+        android:textColor="#B3FFFFFF"
+        android:textSize="14sp"
+        android:letterSpacing="0.05"
+        app:layout_constraintTop_toBottomOf="@id/tvIncomingHeader"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginTop="24dp"/>
+        android:layout_marginTop="12dp"/>
 
     <!-- Task title -->
     <TextView
         android:id="@+id/tvTaskTitle"
-        android:layout_width="wrap_content"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="Incoming Reminder"
-        android:textColor="#AAAAAA"
-        android:textSize="18sp"
+        android:text="Reminder"
+        android:textColor="#FFFFFF"
+        android:textSize="28sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:paddingHorizontal="24dp"
+        android:maxLines="2"
+        android:ellipsize="end"
         app:layout_constraintTop_toBottomOf="@id/tvCallerName"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginTop="8dp"/>
+        android:layout_marginTop="12dp"/>
 
-    <!-- Decline button -->
-    <LinearLayout
-        android:id="@+id/btnDecline"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="#CC2222"
-        android:clickable="true"
-        android:focusable="true"
-        app:layout_constraintBottom_toBottomOf="parent"
+    <!-- Background Pulse Circles (Hidden by default, used for animation) -->
+    <View
+        android:id="@+id/pulseCircle1"
+        android:layout_width="140dp"
+        android:layout_height="140dp"
+        android:background="@drawable/bg_pulse_circle"
+        android:alpha="0"
+        app:layout_constraintTop_toTopOf="@id/pulseContainer"
+        app:layout_constraintBottom_toBottomOf="@id/pulseContainer"
+        app:layout_constraintStart_toStartOf="@id/pulseContainer"
+        app:layout_constraintEnd_toEndOf="@id/pulseContainer"/>
+
+    <View
+        android:id="@+id/pulseCircle2"
+        android:layout_width="140dp"
+        android:layout_height="140dp"
+        android:background="@drawable/bg_pulse_circle"
+        android:alpha="0"
+        app:layout_constraintTop_toTopOf="@id/pulseContainer"
+        app:layout_constraintBottom_toBottomOf="@id/pulseContainer"
+        app:layout_constraintStart_toStartOf="@id/pulseContainer"
+        app:layout_constraintEnd_toEndOf="@id/pulseContainer"/>
+
+    <!-- Pulse Icon Container -->
+    <FrameLayout
+        android:id="@+id/pulseContainer"
+        android:layout_width="140dp"
+        android:layout_height="140dp"
+        app:layout_constraintTop_toBottomOf="@id/tvTaskTitle"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toStartOf="@id/btnAnswer"
-        android:layout_marginBottom="80dp"
-        android:layout_marginEnd="24dp">
-        <ImageView
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:src="@android:drawable/ic_menu_close_clear_cancel"
-            android:tint="#FFFFFF"/>
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Dismiss"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp"
-            android:layout_marginTop="4dp"/>
-    </LinearLayout>
-
-    <!-- Answer button -->
-    <LinearLayout
-        android:id="@+id/btnAnswer"
-        android:layout_width="72dp"
-        android:layout_height="72dp"
-        android:orientation="vertical"
-        android:gravity="center"
-        android:background="#22AA44"
-        android:clickable="true"
-        android:focusable="true"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintStart_toEndOf="@id/btnDecline"
         app:layout_constraintEnd_toEndOf="parent"
-        android:layout_marginBottom="80dp"
-        android:layout_marginStart="24dp">
+        android:layout_marginTop="60dp">
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_pulse_circle"/>
+
         <ImageView
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:src="@android:drawable/ic_menu_call"
-            android:tint="#FFFFFF"/>
-        <TextView
+            android:layout_width="70dp"
+            android:layout_height="70dp"
+            android:layout_gravity="center"
+            android:src="@android:drawable/ic_lock_idle_alarm"
+            app:tint="#FFFFFF"/>
+    </FrameLayout>
+
+    <!-- Instruction text -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Incoming Task Reminder"
+        android:textColor="#B3FFFFFF"
+        android:textSize="16sp"
+        app:layout_constraintTop_toBottomOf="@id/pulseContainer"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginTop="40dp"/>
+
+    <!-- Action Buttons -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_marginBottom="60dp">
+
+        <!-- Decline button -->
+        <LinearLayout
+            android:id="@+id/btnDecline"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Answer"
-            android:textColor="#FFFFFF"
-            android:textSize="11sp"
-            android:layout_marginTop="4dp"/>
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginEnd="40dp"
+            android:clickable="true"
+            android:focusable="true">
+            <View
+                android:layout_width="70dp"
+                android:layout_height="70dp"
+                android:background="@drawable/bg_call_button_decline"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Decline"
+                android:textColor="#B3FFFFFF"
+                android:textSize="14sp"
+                android:layout_marginTop="8dp"/>
+        </LinearLayout>
+
+        <!-- Answer button -->
+        <LinearLayout
+            android:id="@+id/btnAnswer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginStart="40dp"
+            android:clickable="true"
+            android:focusable="true">
+            <View
+                android:layout_width="70dp"
+                android:layout_height="70dp"
+                android:background="@drawable/bg_call_button_answer"/>
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Accept"
+                android:textColor="#B3FFFFFF"
+                android:textSize="14sp"
+                android:layout_marginTop="8dp"/>
+        </LinearLayout>
+
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

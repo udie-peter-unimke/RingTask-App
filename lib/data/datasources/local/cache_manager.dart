@@ -18,6 +18,7 @@ class CacheManager {
   static const String _userKey = 'cached_user';
   static const String _lastSyncKey = 'last_sync_timestamp';
   static const String _deviceIdKey = 'device_id';
+  static const String _kOnboardingSeenKey = 'onboarding_complete';
 
   CacheManager({required SharedPreferences prefs}) : _prefs = prefs;
 
@@ -172,6 +173,25 @@ class CacheManager {
       AppLogger.error('Error clearing cached user data', error: e);
       return false;
     }
+  }
+
+  // ============================================================================
+  // ONBOARDING STATUS
+  // ============================================================================
+
+  /// Returns true if the user has already completed onboarding.
+  Future<bool> hasSeenOnboarding() async {
+    return _prefs.getBool(_kOnboardingSeenKey) ?? false;
+  }
+
+  /// Marks onboarding as complete so it is never shown again.
+  Future<void> setOnboardingSeen() async {
+    await _prefs.setBool(_kOnboardingSeenKey, true);
+  }
+
+  /// (Dev/debug only) Resets the onboarding flag so it shows again.
+  Future<void> resetOnboarding() async {
+    await _prefs.remove(_kOnboardingSeenKey);
   }
 
   // ============================================================================

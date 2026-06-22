@@ -13,7 +13,7 @@ class _TaskInputScreenState extends State<TaskInputScreen> {
 
 
   @override
-  Future<void> dispose() async {
+  void dispose() {
     _textController.dispose();  // Dispose the controller here
     super.dispose();
   }

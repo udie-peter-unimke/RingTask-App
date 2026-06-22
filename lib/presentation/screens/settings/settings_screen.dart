@@ -1,6 +1,9 @@
 // lib/presentation/screens/settings/settings_screen.dart
+import 'package:audioplayers/audioplayers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ringtask/blocs/auth/auth_bloc.dart';
 import 'package:ringtask/blocs/auth/auth_event.dart';
@@ -20,9 +23,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool pushNotifications = true;
   bool fingerprintUnlock = false;
 
+  late final AudioPlayer _audioPlayer;
+  PlayerState _playerState = PlayerState.stopped;
+
+  @override
+  void initState() {
+    super.initState();
+    _audioPlayer = AudioPlayer();
+    _audioPlayer.onPlayerStateChanged.listen((state) {
+      if (mounted) setState(() => _playerState = state);
+    });
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
-  /// Resolves the best available settings object from any loaded BLoC state.
   SettingsModel? _resolveSettings(SettingsState state) {
     if (state is SettingsLoaded) return state.settings;
     if (state is SettingsUpdateSuccess) return state.settings;
@@ -34,33 +54,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   String _themeModeLabel(String mode) {
     switch (mode) {
-      case 'light':
-        return 'Light';
-      case 'dark':
-        return 'Dark';
-      default:
-        return 'System';
+      case 'light': return 'Light';
+      case 'dark': return 'Dark';
+      case 'oled': return 'OLED';
+      default: return 'System';
     }
   }
 
   IconData _themeModeIcon(String mode) {
     switch (mode) {
-      case 'light':
-        return Icons.wb_sunny_rounded;
-      case 'dark':
-        return Icons.nightlight_round;
-      default:
-        return Icons.settings_suggest_rounded;
+      case 'light': return Icons.wb_sunny_rounded;
+      case 'dark': return Icons.nightlight_round;
+      case 'oled': return Icons.brightness_2_rounded;
+      default: return Icons.settings_suggest_rounded;
     }
   }
-
-  /// Extracts just the filename from a full file path for display.
-  String _ringtoneLabel(String? path) {
-    if (path == null || path.isEmpty) return 'Default';
-    return path.split('/').last;
-  }
-
-  // ─── Actions ─────────────────────────────────────────────────────────────
 
   void _showThemeSheet(BuildContext context, String current) {
     showModalBottomSheet<void>(
@@ -73,7 +81,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // drag handle
             Container(
               margin: const EdgeInsets.only(top: 12, bottom: 4),
               width: 40,
@@ -99,9 +106,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               label: 'Light',
               isSelected: current == 'light',
               onTap: () {
-                context
-                    .read<SettingsBloc>()
-                    .add(const UpdateThemeSettings(themeMode: 'light'));
+                context.read<SettingsBloc>().add(
+                    const UpdateThemeSettings(themeMode: 'light'));
                 Navigator.pop(sheetCtx);
               },
             ),
@@ -110,9 +116,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
               label: 'Dark',
               isSelected: current == 'dark',
               onTap: () {
-                context
-                    .read<SettingsBloc>()
-                    .add(const UpdateThemeSettings(themeMode: 'dark'));
+                context.read<SettingsBloc>().add(
+                    const UpdateThemeSettings(themeMode: 'dark'));
+                Navigator.pop(sheetCtx);
+              },
+            ),
+            _ThemeOption(
+              icon: Icons.brightness_2_rounded,
+              label: 'OLED (Pure Black)',
+              isSelected: current == 'oled',
+              onTap: () {
+                context.read<SettingsBloc>().add(
+                    const UpdateThemeSettings(themeMode: 'oled'));
                 Navigator.pop(sheetCtx);
               },
             ),
@@ -121,9 +136,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               label: 'System',
               isSelected: current == 'system',
               onTap: () {
-                context
-                    .read<SettingsBloc>()
-                    .add(const UpdateThemeSettings(themeMode: 'system'));
+                context.read<SettingsBloc>().add(
+                    const UpdateThemeSettings(themeMode: 'system'));
                 Navigator.pop(sheetCtx);
               },
             ),
@@ -134,22 +148,152 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _pickRingtone(BuildContext context) async {
+  String _ringtoneLabel(String? path) {
+    if (path == null || path.isEmpty) return 'Default';
+    if (path.startsWith('content://')) return 'System Ringtone';
+    return path.split('/').last;
+  }
+
+  // ─── Actions ─────────────────────────────────────────────────────────────
+
+  void _showRingtonePickerOptions(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) {
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 4),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade400,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text(
+                'Select Ringtone Source',
+                style: Theme.of(context)
+                    .textTheme
+                    .titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.library_music_rounded, color: Color(0xFF2196F3)),
+              title: const Text('System Ringtone'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _pickSystemRingtone(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.audio_file_rounded, color: Color(0xFF2196F3)),
+              title: const Text('Pick Audio File'),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _pickAudioFile(context);
+              },
+            ),
+            const SizedBox(height: 24),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pickSystemRingtone(BuildContext context) async {
+    try {
+      const channel = MethodChannel('ringtask/workmanager');
+      final String? uri = await channel.invokeMethod<String>('pickRingtone');
+      
+      if (!context.mounted) return;
+      if (uri != null) {
+        context.read<SettingsBloc>().add(
+          UpdateSingleSetting(key: 'fakeCallRingtone', value: uri),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error picking system ringtone')),
+      );
+    }
+  }
+
+  Future<void> _pickAudioFile(BuildContext context) async {
+    // Request permissions first (especially for Android 13+)
+    if (Theme.of(context).platform == TargetPlatform.android) {
+      final status = await Permission.audio.request();
+      if (status.isPermanentlyDenied) {
+        if (!context.mounted) return;
+        _showPermissionDialog(context);
+        return;
+      }
+    }
+
     final result = await FilePicker.platform.pickFiles(
       type: FileType.audio,
       allowMultiple: false,
     );
 
     if (!context.mounted) return;
+    if (result == null) return;
 
-    if (result != null && result.files.single.path != null) {
-      final path = result.files.single.path!;
-      // UpdateSingleSetting is the safest call here since we only
-      // want to touch fakeCallRingtone and leave other fake-call
-      // fields untouched.
-      context.read<SettingsBloc>().add(
-        UpdateSingleSetting(key: 'fakeCallRingtone', value: path),
+    final path = result.files.single.path;
+
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Could not access this file. Try a different audio file.'),
+          backgroundColor: Colors.orange,
+        ),
       );
+      return;
+    }
+
+    context.read<SettingsBloc>().add(
+      UpdateSingleSetting(key: 'fakeCallRingtone', value: path),
+    );
+  }
+
+  Future<void> _togglePreview(String? path) async {
+    if (path == null || path.isEmpty) {
+      // Play default asset if no custom path
+      if (_playerState == PlayerState.playing) {
+        await _audioPlayer.stop();
+      } else {
+        await _audioPlayer.play(AssetSource('sounds/ringtone.mp3'));
+      }
+      return;
+    }
+
+    if (_playerState == PlayerState.playing) {
+      await _audioPlayer.stop();
+    } else {
+      try {
+        if (path.startsWith('content://')) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Preview not available for system ringtones.')),
+          );
+        } else {
+          await _audioPlayer.play(DeviceFileSource(path));
+        }
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error playing audio file')),
+        );
+      }
     }
   }
 
@@ -159,13 +303,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  void _showPermissionDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Permission Required'),
+        content: const Text(
+            'RingTask needs access to your music files to set a custom ringtone. Please enable it in Settings.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showLogoutDialog(BuildContext context) {
     showDialog<void>(
       context: context,
       builder: (dialogCtx) {
         return AlertDialog(
-          shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
           title: const Text('Log Out'),
           content: const Text('Are you sure you want to log out?'),
           actions: [
@@ -181,9 +349,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             TextButton(
               onPressed: () {
                 Navigator.pop(dialogCtx);
-                // ⚠️  Verify that your AuthEvent uses LogoutRequested.
-                // If it's named differently (e.g. SignOutRequested),
-                // update the line below accordingly.
                 context.read<AuthBloc>().add(const LogoutRequested());
               },
               child: const Text(
@@ -231,10 +396,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
       builder: (context, state) {
         final settings = _resolveSettings(state);
-        final themeMode = settings?.themeMode ?? 'system';
+        final themeMode = settings?.themeMode ?? 'light';
+        final show24HourTime = settings?.show24HourTime ?? false;
         final ringtonePath = settings?.fakeCallRingtone;
-
-        final isLoading = state is SettingsLoading || state is SettingsUpdating;
+        final isLoading =
+            state is SettingsLoading || state is SettingsUpdating;
 
         return Scaffold(
           backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -242,6 +408,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             backgroundColor: Colors.transparent,
             elevation: 0,
             centerTitle: true,
+            iconTheme: IconThemeData(color: Theme.of(context).colorScheme.primary),
             title: const Text(
               'Settings',
               style: TextStyle(
@@ -270,7 +437,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── Account ───────────────────────────────────────────────
                 _buildSectionHeader('Account Settings'),
                 _buildCard([
                   _buildNavTile(
@@ -285,26 +451,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onTap: () {},
                   ),
                 ]),
-
                 const SizedBox(height: 20),
-
-                // ── Appearance ────────────────────────────────────────────
-                _buildSectionHeader('Appearance'),
+                _buildSectionHeader('Appearance & General'),
                 _buildCard([
-                  _buildThemeTile(themeMode, context),
+                  ListTile(
+                    onTap: () => _showThemeSheet(context, themeMode),
+                    leading: Icon(
+                      _themeModeIcon(themeMode),
+                      color: const Color(0xFF2196F3),
+                      size: 24,
+                    ),
+                    title: const Text('Theme',
+                        style:
+                        TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _themeModeLabel(themeMode),
+                          style: const TextStyle(fontSize: 14, color: Colors.grey),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
+                      ],
+                    ),
+                    contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  ),
+                  _buildDivider(),
+                  _buildSwitchTile(
+                    icon: Icons.access_time_rounded,
+                    title: 'Use 24-Hour Format',
+                    value: show24HourTime,
+                    onChanged: (val) {
+                      context.read<SettingsBloc>().add(
+                        UpdateSingleSetting(key: 'show24HourTime', value: val),
+                      );
+                    },
+                  ),
                 ]),
-
                 const SizedBox(height: 20),
-
-                // ── Ringtone ──────────────────────────────────────────────
                 _buildSectionHeader('Ringtone'),
-                _buildCard([
-                  _buildRingtoneTile(ringtonePath, context),
-                ]),
-
+                _buildCard([_buildRingtoneTile(ringtonePath, context)]),
                 const SizedBox(height: 20),
-
-                // ── Notifications ─────────────────────────────────────────
                 _buildSectionHeader('Notifications'),
                 _buildCard([
                   _buildSwitchTile(
@@ -315,10 +504,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         setState(() => pushNotifications = val),
                   ),
                 ]),
-
                 const SizedBox(height: 20),
-
-                // ── Privacy ───────────────────────────────────────────────
                 _buildSectionHeader('Privacy & Security'),
                 _buildCard([
                   _buildSwitchTile(
@@ -329,10 +515,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         setState(() => fingerprintUnlock = val),
                   ),
                 ]),
-
                 const SizedBox(height: 20),
-
-                // ── About ─────────────────────────────────────────────────
                 _buildSectionHeader('About RingTask'),
                 _buildCard([
                   _buildNavTile(
@@ -343,12 +526,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildDivider(),
                   _buildVersionTile(),
                 ]),
-
                 const SizedBox(height: 30),
-
-                // ── Logout ────────────────────────────────────────────────
                 _buildLogoutButton(context),
-
                 const SizedBox(height: 30),
               ],
             ),
@@ -358,7 +537,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ─── Shared tile builders ─────────────────────────────────────────────────
+  // ─── Tile builders ────────────────────────────────────────────────────────
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -368,7 +547,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
         style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w600,
-          color: Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.6),
+          color: Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.color
+              ?.withValues(alpha: 0.6),
           letterSpacing: 0.4,
         ),
       ),
@@ -408,8 +591,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onTap: onTap,
       leading: Icon(icon, color: const Color(0xFF2196F3), size: 24),
       title: Text(title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
-      trailing: const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
+          style:
+          const TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
+      trailing:
+      const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
       contentPadding:
       const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
     );
@@ -424,7 +609,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListTile(
       leading: Icon(icon, color: const Color(0xFF2196F3), size: 24),
       title: Text(title,
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
+          style:
+          const TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
       trailing: Switch(
         value: value,
         onChanged: onChanged,
@@ -435,42 +621,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildThemeTile(String themeMode, BuildContext context) {
-    return ListTile(
-      onTap: () => _showThemeSheet(context, themeMode),
-      leading: Icon(
-        _themeModeIcon(themeMode),
-        color: const Color(0xFF2196F3),
-        size: 24,
-      ),
-      title: const Text('Theme',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            _themeModeLabel(themeMode),
-            style: const TextStyle(fontSize: 14, color: Colors.grey),
-          ),
-          const SizedBox(width: 4),
-          const Icon(Icons.chevron_right, color: Colors.grey, size: 24),
-        ],
-      ),
-      contentPadding:
-      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-    );
-  }
-
   Widget _buildRingtoneTile(String? path, BuildContext context) {
     final label = _ringtoneLabel(path);
     final hasCustom = path != null && path.isNotEmpty;
+    final isPlaying = _playerState == PlayerState.playing;
 
     return ListTile(
-      onTap: () => _pickRingtone(context),
-      leading:
-      const Icon(Icons.music_note_outlined, color: Color(0xFF2196F3), size: 24),
+      onTap: () => _showRingtonePickerOptions(context),
+      leading: const Icon(Icons.music_note_outlined,
+          color: Color(0xFF2196F3), size: 24),
       title: const Text('Ringtone',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
+          style:
+          TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
       subtitle: Text(
         label,
         style: const TextStyle(fontSize: 12, color: Colors.grey),
@@ -480,6 +642,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          IconButton(
+            icon: Icon(
+              isPlaying ? Icons.stop_circle : Icons.play_circle_filled,
+              color: const Color(0xFF2196F3),
+              size: 28,
+            ),
+            onPressed: () => _togglePreview(path),
+          ),
           if (hasCustom)
             GestureDetector(
               onTap: () => _clearRingtone(context),
@@ -489,7 +659,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   color: Colors.grey.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.close, color: Colors.grey, size: 16),
+                child: const Icon(Icons.close,
+                    color: Colors.grey, size: 16),
               ),
             ),
           const SizedBox(width: 4),
@@ -506,7 +677,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       leading:
       const Icon(Icons.code, color: Color(0xFF2196F3), size: 24),
       title: const Text('Version',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
+          style:
+          TextStyle(fontSize: 16, fontWeight: FontWeight.w400)),
       subtitle: const Text('Current application build',
           style: TextStyle(fontSize: 12, color: Colors.grey)),
       trailing: const Text('1.0.0',
@@ -527,7 +699,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: const Icon(Icons.logout_rounded, size: 20),
           label: const Text(
             'Log Out',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            style:
+            TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
           ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.red.shade50,
@@ -545,7 +718,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ─── Private helper widget ─────────────────────────────────────────────────
+// ─── Private helper widget ────────────────────────────────────────────────
 
 class _ThemeOption extends StatelessWidget {
   const _ThemeOption({

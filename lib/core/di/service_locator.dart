@@ -1,171 +1,196 @@
 // lib/core/di/service_locator.dart
-
 import 'package:get_it/get_it.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:ringtask/utils/logger.dart';
-
-// Datasources
-import 'package:ringtask/data/datasources/remote/auth_remote_datasource.dart';
-import 'package:ringtask/data/datasources/local/cache_manager.dart';
-
-// Blocs
-import 'package:ringtask/blocs/auth/auth_bloc.dart';
-import 'package:ringtask/blocs/fake_call/fake_call_bloc.dart';
-import 'package:ringtask/blocs/settings/settings_bloc.dart';
-import 'package:ringtask/blocs/task/task_bloc.dart';
-import 'package:ringtask/blocs/tts/tts_bloc.dart';
-import 'package:ringtask/blocs/tts/tts_settings_bloc.dart';
-import 'package:ringtask/blocs/voice/voice_bloc.dart';
-
-// Repositories
+// ===== Repositories =====
+import 'package:ringtask/repositories/task_repository.dart';
+import 'package:ringtask/repositories/settings_repository.dart';
+import 'package:ringtask/repositories/loop_repository.dart';
 import 'package:ringtask/repositories/auth_repository.dart';
 import 'package:ringtask/repositories/fake_call_repository.dart';
-import 'package:ringtask/repositories/settings_repository.dart';
-import 'package:ringtask/repositories/task_repository.dart';
 import 'package:ringtask/repositories/tts_repository.dart';
 import 'package:ringtask/repositories/voice_repository.dart';
 
-// Services
-import 'package:ringtask/services/firebase/firebase_auth_service.dart';
-import 'package:ringtask/services/firebase/firestore_service.dart';
-import 'package:ringtask/services/firebase/notification_service.dart';
-import 'package:ringtask/services/firebase/permission_service.dart';
-import 'package:ringtask/services/firebase/tts_service.dart';
-import 'package:ringtask/services/firebase/voice_service.dart';
+// ===== Datasources (Local) =====
+import 'package:ringtask/data/datasources/local/cache_manager.dart';
+import 'package:ringtask/data/datasources/local/loop_local_datasource.dart';
+
+import 'package:ringtask/data/datasources/remote/loop_remote_datasource.dart';
+import 'package:ringtask/data/datasources/remote/auth_remote_datasource.dart';
+
+// ===== Services =====
 import 'package:ringtask/services/firebase/fake_call_service.dart';
+import 'package:ringtask/services/firebase/firestore_service.dart';
+import 'package:ringtask/services/firebase/firebase_auth_service.dart';
+import 'package:ringtask/services/firebase/voice_service.dart';
+import 'package:ringtask/services/firebase/permission_service.dart';
+import 'package:ringtask/services/scheduler/alarm_scheduler.dart';
+import 'package:ringtask/services/sync_service.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+
+// ===== Utils =====
+import 'package:ringtask/utils/logger.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 final getIt = GetIt.instance;
 
-// Helper for FakeCallBloc param
-extension GetItX on GetIt {
-  T call<T extends Object>({dynamic param1, dynamic param2}) =>
-      this<T>(param1: param1, param2: param2);
+Future<void> setupServiceLocator() async {
+  AppLogger.info('🚀 Setting up service locator...');
+
+  try {
+    // ===== Firebase Instances =====
+    _registerFirebaseServices();
+
+    // ===== SharedPreferences =====
+    await _registerSharedPreferences();
+
+    // ===== Core Managers & Local Services =====
+    _registerLocalServices();
+
+    // ===== Firebase Services =====
+    _registerFirebaseClients();
+
+    // ===== Datasources =====
+    _registerDatasources();
+
+    // ===== Repositories =====
+    _registerRepositories();
+
+    // ===== Scheduler & Sync Services =====
+    await _registerSchedulerAndSyncServices();
+
+    AppLogger.info('✅ Service locator setup complete');
+  } catch (e, stack) {
+    AppLogger.error('❌ Service locator setup failed: $e');
+    AppLogger.error(stack.toString());
+    rethrow;
+  }
 }
 
-Future<void> setupServiceLocator() async {
-  AppLogger.initialize(logLevel: LogLevel.debug);
-  AppLogger.info('Setting up Service Locator...');
+void _registerFirebaseServices() {
+  getIt.registerSingleton<FirebaseAuth>(FirebaseAuth.instance);
+  getIt.registerSingleton<FirebaseFirestore>(FirebaseFirestore.instance);
+  AppLogger.info('✓ Firebase instances registered');
+}
 
-  // ====================== CORE SERVICES ======================
-  getIt.registerLazySingleton<PermissionService>(() => PermissionService());
-  getIt.registerLazySingleton<FirebaseAuthService>(() => FirebaseAuthService());
-  getIt.registerLazySingleton<FirestoreService>(() => FirestoreService());
-  getIt.registerLazySingleton<NotificationService>(() => NotificationService());
+Future<void> _registerSharedPreferences() async {
+  final sharedPrefs = await SharedPreferences.getInstance();
+  getIt.registerSingleton<SharedPreferences>(sharedPrefs);
+  AppLogger.info('✓ SharedPreferences registered');
+}
 
-  getIt.registerLazySingleton<FakeCallService>(() {
-    final service = FakeCallService();
-    service.initialize();
-    return service;
-  });
+void _registerLocalServices() {
+  getIt.registerSingleton<CacheManager>(
+    CacheManager(prefs: getIt<SharedPreferences>()),
+  );
+  getIt.registerLazySingleton<Connectivity>(() => Connectivity());
+  AppLogger.info('✓ Local services registered');
+}
 
-  getIt.registerLazySingleton<FlutterTts>(() => FlutterTts());
-  getIt.registerLazySingleton<TtsService>(
-        () => TtsService(getIt<FlutterTts>()),
+void _registerFirebaseClients() {
+  final firestoreService = FirestoreService(
+    firestore: getIt<FirebaseFirestore>(),
+  );
+  getIt.registerSingleton<FirestoreService>(firestoreService);
+
+  final firebaseAuthService = FirebaseAuthService(
+    firebaseAuth: getIt<FirebaseAuth>(),
+  );
+  getIt.registerSingleton<FirebaseAuthService>(firebaseAuthService);
+
+  final voiceService = VoiceService();
+  getIt.registerSingleton<VoiceService>(voiceService);
+
+  final fakeCallService = FakeCallService();
+  getIt.registerSingleton<FakeCallService>(fakeCallService);
+
+  final permissionService = PermissionService();
+  getIt.registerSingleton<IPermissionService>(permissionService);
+
+  AppLogger.info('✓ Firebase services registered');
+}
+
+void _registerDatasources() {
+  getIt.registerSingleton<LoopLocalDataSource>(
+    LoopLocalDataSource(prefs: getIt<SharedPreferences>()),
   );
 
-  // VoiceService is async (mic init, permissions, etc.)
-  getIt.registerSingletonAsync<VoiceService>(() async {
-    final service = VoiceService();
-    await service.initialize();
-    return service;
-  });
-
-  // Wait for async core services (VoiceService)
-  await getIt.allReady();
-
-  // ====================== LOCAL CACHE ======================
-  getIt.registerSingletonAsync<SharedPreferences>(
-        () async => SharedPreferences.getInstance(),
+  getIt.registerSingleton<LoopRemoteDataSource>(
+    LoopRemoteDataSource(firestore: getIt<FirebaseFirestore>()),
   );
 
-  getIt.registerLazySingleton<CacheManager>(
-        () => CacheManager(prefs: getIt<SharedPreferences>()),
+  getIt.registerSingleton<AuthRemoteDataSource>(
+    AuthRemoteDataSourceImpl(getIt<FirebaseAuth>()),
   );
 
-  // Wait for SharedPreferences + CacheManager
-  await getIt.allReady();
+  AppLogger.info('✓ Datasources registered');
+}
 
-  // ====================== DATASOURCES ======================
-  getIt.registerLazySingleton<AuthRemoteDataSource>(
-        () => AuthRemoteDataSourceImpl(FirebaseAuth.instance),
+void _registerRepositories() {
+  // Task Repository
+  final taskRepository = TaskRepository(
+    firestoreService: getIt<FirestoreService>(),
+    cacheManager: getIt<CacheManager>(),
   );
+  getIt.registerSingleton<TaskRepository>(taskRepository);
 
-  // If you later add TaskRemoteDataSource / TaskLocalDataSource, register them here.
-
-  // ====================== REPOSITORIES ======================
-  getIt.registerLazySingleton<SettingsRepository>(
-        () => SettingsRepository(getIt<CacheManager>()),
+  // Loop Repository
+  final loopRepository = LoopRepository(
+    localDataSource: getIt<LoopLocalDataSource>(),
+    remoteDataSource: getIt<LoopRemoteDataSource>(),
   );
+  getIt.registerSingleton<LoopRepository>(loopRepository);
 
-  getIt.registerLazySingleton<AuthRepository>(
-        () => AuthRepository(
-      authRemoteDataSource: getIt<AuthRemoteDataSource>(),
-      firestoreService: getIt<FirestoreService>(),
-    ),
+  // Settings Repository
+  final settingsRepository = SettingsRepository(
+    getIt<CacheManager>(),
   );
+  getIt.registerSingleton<SettingsRepository>(settingsRepository);
 
-  getIt.registerLazySingleton<TaskRepository>(
-        () => TaskRepository(
-      getIt<FirestoreService>(),
-      getIt<CacheManager>(),
-    ),
+  // Auth Repository
+  final authRepository = AuthRepository(
+    authRemoteDataSource: getIt<AuthRemoteDataSource>(),
   );
+  getIt.registerSingleton<IAuthRepository>(authRepository);
 
-  getIt.registerLazySingleton<TtsRepository>(
-        () => TtsRepository(getIt<FlutterTts>()),
+  // FakeCall Repository
+  final fakeCallRepository = FakeCallRepository(
+    service: getIt<FakeCallService>(),
   );
+  getIt.registerSingleton<FakeCallRepository>(fakeCallRepository);
 
-  getIt.registerLazySingleton<VoiceRepository>(
-        () => VoiceRepository(
-      voiceService: getIt<VoiceService>(),
-      permissionService: getIt<PermissionService>(),
-    ),
+  // Voice Repository
+  final voiceRepository = VoiceRepository(
+    voiceService: getIt<VoiceService>(),
+    permissionService: getIt<IPermissionService>() as PermissionService,
   );
+  getIt.registerSingleton<IVoiceRepository>(voiceRepository);
 
-  getIt.registerLazySingleton<FakeCallRepository>(
-        () => FakeCallRepository(),
+  // TTS Repository
+  final ttsRepository = TtsRepository(FlutterTts());
+  getIt.registerSingleton<TtsRepository>(ttsRepository);
+
+  AppLogger.info('✓ Repositories registered');
+}
+
+Future<void> _registerSchedulerAndSyncServices() async {
+  // Register AlarmScheduler
+  final alarmScheduler = AlarmScheduler();
+  await alarmScheduler.initialize();
+  getIt.registerSingleton<AlarmScheduler>(alarmScheduler);
+
+  // Register SyncService
+  final syncService = SyncService(
+    getIt<TaskRepository>(),
+    getIt<Connectivity>(),
   );
+  getIt.registerSingleton<SyncService>(syncService);
 
-  // ====================== BLOCS ======================
-  getIt.registerFactory<AuthBloc>(
-        () => AuthBloc(authRepository: getIt<AuthRepository>()),
-  );
+  // Initialize FakeCallService (already registered as singleton)
+  final fakeCallService = getIt<FakeCallService>();
+  await fakeCallService.initialize();
 
-  getIt.registerFactory<SettingsBloc>(
-        () => SettingsBloc(settingsRepository: getIt<SettingsRepository>()),
-  );
-
-  getIt.registerFactory<TaskBloc>(
-        () => TaskBloc(taskRepository: getIt<TaskRepository>()),
-  );
-
-  getIt.registerFactory<TtsBloc>(
-        () => TtsBloc(ttsRepository: getIt<TtsRepository>()),
-  );
-
-  getIt.registerFactory<TtsSettingsBloc>(
-        () => TtsSettingsBloc(
-      settingsRepository: getIt<SettingsRepository>(),
-      ttsRepository: getIt<TtsRepository>(),
-    ),
-  );
-
-  getIt.registerFactory<VoiceBloc>(
-        () => VoiceBloc(voiceRepository: getIt<VoiceRepository>()),
-  );
-
-  // FakeCallBloc with userId param
-  getIt.registerFactoryParam<FakeCallBloc, String, void>(
-        (userId, _) => FakeCallBloc(
-      fakeCallRepository: getIt<FakeCallRepository>(),
-      taskRepository: getIt<TaskRepository>(),
-      ttsService: getIt<TtsService>(),
-      userId: userId,
-    ),
-  );
-
-  AppLogger.info('✅ Service Locator setup completed successfully!');
+  AppLogger.info('✓ Scheduler and Sync services registered');
 }

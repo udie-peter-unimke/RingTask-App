@@ -1,90 +1,84 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-
-import 'package:ringtask/app.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:ringtask/firebase_options.dart';
 import 'package:ringtask/core/di/service_locator.dart';
+import 'package:ringtask/repositories/auth_repository.dart';
+import 'package:ringtask/repositories/task_repository.dart';
+import 'package:ringtask/repositories/fake_call_repository.dart';
+import 'package:ringtask/repositories/voice_repository.dart';
+import 'package:ringtask/blocs/auth/auth_bloc.dart';
+import 'package:ringtask/blocs/auth/auth_event.dart';
+import 'package:ringtask/blocs/task/task_bloc.dart';
+import 'package:ringtask/blocs/settings/settings_bloc.dart';
+import 'package:ringtask/blocs/settings/settings_event.dart';
+import 'package:ringtask/blocs/voice/voice_bloc.dart';
+import 'package:ringtask/blocs/loop/loop_bloc.dart';
 import 'package:ringtask/utils/logger.dart';
-import 'package:ringtask/services/scheduler/alarm_scheduler.dart';
-import 'package:ringtask/services/firebase/fake_call_service.dart';
+import 'package:ringtask/app.dart';
 
-class ErrorScreen extends StatelessWidget {
-  final String error;
-  const ErrorScreen({super.key, required this.error});
+void main() async {
+  // ===== Initialization =====
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Firebase (only if not already initialized, e.g. after hot restart)
+  try {
+    if (Firebase.apps.isEmpty) {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+    }
+  } catch (e) {
+    AppLogger.error('Firebase initialization failed. Check your firebase_options.dart: $e');
+  }
+
+  // Initialize AppLogger
+  AppLogger.initialize();
+
+  // Setup Service Locator (all services, datasources, repos, permissions)
+  await setupServiceLocator();
+
+  // ===== Run App =====
+  runApp(const RingTaskApp());
+}
+
+class RingTaskApp extends StatelessWidget {
+  const RingTaskApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline, size: 64, color: Colors.red),
-              const SizedBox(height: 16),
-              const Text(
-                'App Initialization Failed',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(error, textAlign: TextAlign.center),
-              ),
-              const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () => runApp(const RingTaskApp()),
-                child: const Text('Retry'),
-              ),
-            ],
+    return MultiBlocProvider(
+      providers: [
+        BlocProvider(
+          create: (context) => AuthBloc(
+            authRepository: getIt<IAuthRepository>(),
+          )..add(const AppStarted()),
+        ),
+        BlocProvider(
+          create: (context) => TaskBloc(
+            taskRepository: getIt<TaskRepository>(),
+            fakeCallRepository: getIt<FakeCallRepository>(),
           ),
         ),
-      ),
+        BlocProvider(
+          create: (context) => SettingsBloc(
+            settingsRepository: getIt(),
+          )..add(const LoadSettings()),
+        ),
+        BlocProvider(
+          create: (context) => VoiceBloc(
+            voiceRepository: getIt<IVoiceRepository>(),
+          ),
+        ),
+        BlocProvider(
+          create: (context) => LoopBloc(
+            repository: getIt(),
+            fakeCallService: getIt(),
+          ),
+        ),
+      ],
+      child: const MainApp(),
     );
-  }
-}
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  AppLogger.initialize(logLevel: LogLevel.debug);
-  AppLogger.info('🚀 Starting RingTask v1.0.0...');
-
-  try {
-    // 1. Firebase
-    await Firebase.initializeApp();
-    AppLogger.info('✅ Firebase initialized');
-
-    // 2. GoogleSignIn — initializes automatically on first use
-    AppLogger.info('✅ GoogleSignIn ready');
-
-    // 3. Service Locator
-    await setupServiceLocator();
-    AppLogger.info('✅ Service Locator initialized');
-
-    // ✅ REMOVED: Workmanager().initialize() — flutter workmanager plugin is
-    // no longer used. Scheduling is handled natively via MethodChannel →
-    // MainActivity → FakeCallWorker (Kotlin WorkManager directly).
-
-    // 4. AlarmScheduler
-    await AlarmScheduler.initialize();
-    AppLogger.info('✅ AlarmScheduler initialized');
-
-    // 5. FakeCallService — initialize first, permissions second
-    await getIt<FakeCallService>().initialize();
-    AppLogger.info('✅ FakeCallService initialized');
-
-    // 6. Request permissions AFTER initialize, sequenced to avoid
-    // "permissionRequestInProgress" conflict
-    await getIt<FakeCallService>().requestPermissions();
-    AppLogger.info('✅ Permissions requested');
-
-    // 7. Run app
-    runApp(const RingTaskApp());
-    AppLogger.info('🎉 RingTask started successfully!');
-
-  } catch (e, stackTrace) {
-    AppLogger.error('❌ FATAL ERROR: $e', stackTrace: stackTrace);
-    runApp(ErrorScreen(error: e.toString()));
   }
 }

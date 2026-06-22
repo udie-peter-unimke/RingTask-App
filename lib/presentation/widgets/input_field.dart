@@ -22,14 +22,12 @@ class InputField extends StatelessWidget {
       decoration: InputDecoration(
         prefixIcon: Icon(icon, color: Colors.blue),
         hintText: hintText,
-        filled: true,
-        fillColor: Colors.grey[100],
         enabledBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: Colors.blue.shade100),
+          borderSide: BorderSide(color: Colors.blue.withValues(alpha: 0.2)),
           borderRadius: BorderRadius.circular(12),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: Colors.blue),
+          borderSide: const BorderSide(color: Colors.blue),
           borderRadius: BorderRadius.circular(12),
         ),
       ),

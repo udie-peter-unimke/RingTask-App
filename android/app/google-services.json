@@ -7,9 +7,46 @@
   "client": [
     {
       "client_info": {
+        "mobilesdk_app_id": "1:909170843494:android:12eac0f38477ef6d0432a7",
+        "android_client_info": {
+          "package_name": "com.apexyron.ringtask"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "909170843494-2v08sdsglpkgt3ii90dl6bj7q9gfefal.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.apexyron.ringtask",
+            "certificate_hash": "2dc395a06e53c34db79591a371eefd1d3df0a64c"
+          }
+        },
+        {
+          "client_id": "909170843494-ls8vio52f9nm4r26rc01uor70c1gersc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBdDEBbI1q97HN5RDk1bMOsy33jqqMA2Zo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "909170843494-ls8vio52f9nm4r26rc01uor70c1gersc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:909170843494:android:0be507326790756c0432a7",
         "android_client_info": {
-          "package_name": "com.example.ringtask"
+          "package_name": "com.apexyron.ringtask"
         }
       },
       "oauth_client": [
@@ -17,7 +54,7 @@
           "client_id": "909170843494-ho3vad0i3eshsgejj583iog1bj1n6sdi.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.example.ringtask",
+            "package_name": "com.apexyron.ringtask",
             "certificate_hash": "2dc395a06e53c34db79591a371eefd1d3df0a64c"
           }
         },

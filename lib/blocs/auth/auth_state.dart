@@ -11,31 +11,32 @@ class AuthInitial extends AuthState {}
 
 class AuthLoading extends AuthState {}
 
+// ✅ Added — required by AuthBloc._onAppStarted
+class AuthOnboardingRequired extends AuthState {}
+
 class AuthSuccess extends AuthState {
   final String uid;
   final String name;
   final String? email;
-  final String? displayName;
 
   const AuthSuccess({
     required this.uid,
     required this.name,
     this.email,
-    this.displayName,
-});
+  });
 
   @override
-  List<Object?> get props => [name];
+  // 🔴 Fixed — was only [name], missing uid and email
+  //    Equatable uses props for == and hashCode, incomplete props
+  //    means two different AuthSuccess states could appear equal
+  List<Object?> get props => [uid, name, email];
 }
 
 class AuthFailure extends AuthState {
-  final String error; // Error message
-  final String name;  // Context name, optional but kept for compatibility
+  final String error;
 
-  const AuthFailure({required this.error, this.name = ''});
+  const AuthFailure({required this.error});
 
   @override
-  List<Object?> get props => [error, name];
-
-  String? get message => null;
+  List<Object?> get props => [error];
 }
