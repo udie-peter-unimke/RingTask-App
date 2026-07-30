@@ -1,8 +1,11 @@
 // lib/services/firebase/fake_call_service.dart
+import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:ringtask/utils/logger.dart';
 import 'package:ringtask/app.dart';
@@ -12,7 +15,9 @@ import 'package:ringtask/utils/ringtone_file_helper.dart';
 import 'package:ringtask/router.dart';
 import 'package:ringtask/data/models/loop_model.dart';
 
-class FakeCallService {
+import 'package:ringtask/repositories/settings_repository.dart';
+
+class FakeCallService with WidgetsBindingObserver {
   static final FakeCallService _instance = FakeCallService._internal();
   factory FakeCallService() => _instance;
 
@@ -27,72 +32,15 @@ class FakeCallService {
 
   bool _isTtsInitialized = false;
   bool _isInitialized = false;
+  bool _isNavigating = false;
+
+  Map<String, dynamic>? _pendingTtsData;
+  bool _shouldOpenTts = false;
 
   // ---------------------------------------------------------------------------
   // Time parsing
   // ---------------------------------------------------------------------------
 
-  /// Safely parses a 12-hour [timeString] in 'H:mm' or 'HH:mm' format.
-  ///
-  /// Returns a `(hour, minute)` record on success, or `null` if the value is
-  /// null, empty, missing the colon separator, non-numeric, or out of range.
-  ///
-  /// This is the single fix point for:
-  ///   RangeError (length): Invalid value: Only valid value is 0: 1
-  /// which fires when [timeString] contains no ':' — split(':') then returns a
-  /// 1-element list and accessing index [1] throws.
-  ///
-  /// [taskId] is used purely for log context; it does not affect the result.
-  ({int hour, int minute})? _parseTimeString(
-      String? timeString,
-      String taskId,
-      ) {
-    if (timeString == null || timeString.isEmpty) {
-      AppLogger.error(
-        '[FakeCallService] Null/empty timeString for task $taskId — skipping',
-      );
-      return null;
-    }
-
-    final parts = timeString.split(':');
-
-    if (parts.length < 2) {
-      // Root cause of the reported RangeError: a stored value with no ':'
-      // (e.g. '', '1200', 'null') produces a 1-element list. Index [1]
-      // is invalid and Dart throws: "Only valid value is 0: 1".
-      AppLogger.error(
-        '[FakeCallService] Malformed timeString="$timeString" for task $taskId '
-            '— no colon separator found. RangeError prevented.',
-      );
-      return null;
-    }
-
-    // Use tryParse, not parse — a non-numeric segment throws FormatException.
-    final hour = int.tryParse(parts[0].trim());
-    final minute = int.tryParse(parts[1].trim());
-
-    if (hour == null || minute == null) {
-      AppLogger.error(
-        '[FakeCallService] Non-numeric timeString="$timeString" for task $taskId '
-            '— hour=${parts[0]}, minute=${parts[1]}',
-      );
-      return null;
-    }
-
-    // 12-hour clock: hour 1–12, minute 0–59.
-    // Hour 0 is not a valid 12-hour value but we allow it defensively
-    // in case a 24-hour string slips through; the AM/PM conversion below
-    // handles it correctly for midnight (12 AM → 0).
-    if (hour < 0 || hour > 12 || minute < 0 || minute > 59) {
-      AppLogger.error(
-        '[FakeCallService] Out-of-range timeString="$timeString" for task $taskId '
-            '— hour=$hour (expected 0–12), minute=$minute (expected 0–59)',
-      );
-      return null;
-    }
-
-    return (hour: hour, minute: minute);
-  }
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -106,35 +54,15 @@ class FakeCallService {
 
     _isInitialized = true;
     final stopwatch = Stopwatch()..start();
+    
+    WidgetsBinding.instance.addObserver(this);
 
-    const androidInit = AndroidInitializationSettings('@mipmap/launcher_icon');
-    await _notifications.initialize(
-      settings: const InitializationSettings(android: androidInit),
-      onDidReceiveNotificationResponse: (NotificationResponse response) {
-        final payload = response.payload;
-        if (payload != null) _navigateToCallScreen(payload);
-      },
-    );
-
-    const channel = AndroidNotificationChannel(
-      'fake_call_channel_v2', // ✅ SYNC: Match Native CHANNEL_ID
-      'Fake Incoming Call',
-      description: 'Simulated incoming call for task reminder',
-      importance: Importance.max,
-      playSound: true, // ✅ Match native fix
-      enableVibration: true,
-    );
-
-    final androidImpl = _notifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
-
-    await androidImpl?.createNotificationChannel(channel);
-    await _initializeTts();
-
+    // 1. Immediately register the method channel handler.
+    // This MUST happen before 'flutterReady' to avoid missing the response.
     _workChannel.setMethodCallHandler((call) async {
       switch (call.method) {
         case 'onFakeCallAnswered':
-          AppLogger.info('Native signaled fake call answered, navigating to /tts');
+          AppLogger.info('Native signaled fake call answered, processing navigation payload');
           Map<String, dynamic>? data;
 
           if (call.arguments is String) {
@@ -150,17 +78,16 @@ class FakeCallService {
             break;
           }
 
-          final navigator = navigatorKey.currentState;
-          if (navigator == null) {
-            AppLogger.error('onFakeCallAnswered: navigatorKey not ready');
-            break;
+          // Trigger explicit robust safe navigation.
+          final lifecycle = WidgetsBinding.instance.lifecycleState;
+          if (lifecycle == AppLifecycleState.resumed) {
+            AppLogger.info('App resumed, triggering immediate TTS navigation');
+            _openTtsNow(data);
+          } else {
+            _pendingTtsData = data;
+            _shouldOpenTts = true;
+            AppLogger.info('App not resumed ($lifecycle), deferring TTS navigation until resume');
           }
-
-          // Navigate directly to TTS screen with a small retry loop.
-          // During cold starts, the message from native may arrive before
-          // the MaterialApp/Navigator is fully mounted.
-          _safeNavigateToTts(data);
-          AppLogger.info('onFakeCallAnswered: triggered safe navigation');
           break;
 
         default:
@@ -168,10 +95,8 @@ class FakeCallService {
       }
     });
 
-    // ✅ Notify Kotlin that Flutter is ready — drains any payload cached
-    // during cold start (alarm fired before Flutter engine was running).
-    // Must be called AFTER setMethodCallHandler so navigateToFakeCall
-    // is already registered when Kotlin responds.
+    // 2. Notify Kotlin that Flutter engine is alive.
+    // This allows native to flush any pending payloads (e.g. from cold start) ASAP.
     try {
       await _workChannel.invokeMethod('flutterReady');
       AppLogger.info('flutterReady sent to native');
@@ -179,7 +104,45 @@ class FakeCallService {
       AppLogger.error('flutterReady invoke failed: $e');
     }
 
-    AppLogger.info('FakeCallService initialized in ${stopwatch.elapsedMilliseconds}ms');
+    // 3. Complete heavy initializations (Plugins, Permissions) in background.
+    // These take 200-500ms and shouldn't block the initial ready signal.
+    _completePluginInitialization(stopwatch).catchError((e) => AppLogger.error('Plugin init failed: $e'));
+  }
+
+  Future<void> _completePluginInitialization(Stopwatch stopwatch) async {
+    try {
+      const androidInit = AndroidInitializationSettings('@mipmap/launcher_icon');
+      await _notifications.initialize(
+        settings: const InitializationSettings(android: androidInit),
+        onDidReceiveNotificationResponse: (NotificationResponse response) {
+          final payload = response.payload;
+          if (payload != null) _navigateToCallScreen(payload);
+        },
+      );
+
+      const channel = AndroidNotificationChannel(
+        'fake_call_channel_v2',
+        'Fake Incoming Call',
+        description: 'Simulated incoming call for task reminder',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+      );
+
+      final androidImpl = _notifications
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+      await androidImpl?.createNotificationChannel(channel);
+      await _initializeTts();
+
+      // ✅ Crucial for Android 10+ background activity starts
+      requestSystemAlertWindowPermission().catchError((e) => AppLogger.error('Permission request failed: $e'));
+      requestNotificationAndAlarmPermissions().catchError((e) => AppLogger.error('Permission request failed: $e'));
+
+      AppLogger.info('FakeCallService background init completed in ${stopwatch.elapsedMilliseconds}ms');
+    } catch (e) {
+      AppLogger.error('FakeCallService background init failed: $e');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -232,6 +195,14 @@ class FakeCallService {
     await requestSystemAlertWindowPermission();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _shouldOpenTts) {
+      AppLogger.info('App resumed, triggering deferred TTS navigation');
+      _openTtsNow();
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Navigation helpers
   // ---------------------------------------------------------------------------
@@ -246,24 +217,127 @@ class FakeCallService {
     }
   }
 
-  Future<void> _safeNavigateToTts(Map<String, dynamic> data) async {
-    // Ensure the TTS screen starts in overlay mode when answered from native
-    final Map<String, dynamic> navData = Map.from(data);
-    navData['isFullScreenOverlay'] = true;
+  /// Refactored to handle lifecycle-aware navigation and TTS coordination
+  Future<void> _openTtsNow([Map<String, dynamic>? data]) async {
+    final navData = data ?? _pendingTtsData;
+    if (navData == null) {
+      AppLogger.warning('_openTtsNow called with no data and no pending data');
+      return;
+    }
 
-    int attempts = 0;
-    while (attempts < 10) {
-      final navigator = navigatorKey.currentState;
-      if (navigator != null) {
-        navigator.pushNamed(AppRouter.ttsRoute, arguments: navData);
-        AppLogger.info('Safe navigation successful on attempt $attempts');
+    if (_isNavigating) {
+      AppLogger.warning('SafeNavigateToTts: already in progress, skipping duplicate request for taskId: ${navData['taskId']}');
+      return;
+    }
+
+    _isNavigating = true;
+    _shouldOpenTts = false;
+    _pendingTtsData = null;
+
+    try {
+      // 1. Prepare Navigation Data
+      // Ensure the TTS screen starts in overlay mode when answered from native
+      final Map<String, dynamic> finalNavData = Map.from(navData);
+      finalNavData['isFullScreenOverlay'] = true;
+      // CRITICAL: Tell the screen NOT to speak yet, we will handle it here
+      finalNavData['skipAutoSpeak'] = true;
+
+      AppLogger.info('SafeNavigateToTts: starting attempts with payload for taskId: ${finalNavData['taskId']}');
+
+      // 2. Navigation with Polling (same robust logic as before)
+      const maxAttempts = 45; 
+      int attempts = 0;
+      bool navigated = false;
+
+      while (attempts < maxAttempts) {
+        final navigator = navigatorKey.currentState;
+        if (navigator != null) {
+          try {
+            // Defer to next frame to avoid build context issues
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (navigatorKey.currentState != null) {
+                navigatorKey.currentState!.pushNamedAndRemoveUntil(
+                  AppRouter.ttsRoute,
+                  (route) => route.isFirst,
+                  arguments: finalNavData,
+                );
+              }
+            });
+            AppLogger.info('Safe navigation scheduled for TTS route on attempt $attempts');
+            navigated = true;
+            break;
+          } catch (e) {
+            AppLogger.error('Navigation execution error during push: $e');
+          }
+        }
+        await Future.delayed(const Duration(milliseconds: 100));
+        attempts++;
+      }
+
+      if (!navigated) {
+        AppLogger.error('Safe navigation radically failed after $attempts attempts');
         return;
       }
-      AppLogger.warning('Navigator not ready (attempt $attempts), retrying...');
-      await Future.delayed(const Duration(milliseconds: 200));
-      attempts++;
+
+      // 3. Defensive Delay for Audio Routing
+      // Allow Android audio manager to transition from telephony back to media
+      await Future.delayed(const Duration(milliseconds: 150));
+
+      // 4. TTS Re-initialization & Speech
+      // Stop current instance to force cleanup
+      await _tts.stop();
+      
+      // Re-initialize with latest settings
+      await _initializeTts();
+      
+      // Build speech text and speak
+      final text = await _buildSpeechText(finalNavData);
+      if (text.isNotEmpty) {
+        await speakText(text);
+      }
+
+    } finally {
+      _isNavigating = false;
     }
-    AppLogger.error('Safe navigation failed after $attempts attempts');
+  }
+
+  Future<String> _buildSpeechText(Map<String, dynamic> task) async {
+    try {
+      // Get settings from GetIt directly if possible or pass them
+      // For simplicity, we can try to fetch from repository via TtsSettingsBloc if available
+      // or just use the same logic as in the screen.
+      
+      // Since this is a service, we'll try to get settings from the repository
+      final settings = await getIt<SettingsRepository>().getSettings();
+      
+      if (!settings.ttsEnabled) return '';
+
+      final parts = <String>[];
+      if (settings.readTitle) {
+        final title = (task['title'] ?? '').toString().trim();
+        if (title.isNotEmpty) parts.add('Task: $title.');
+      }
+
+      final scheduledTimeStr = task['scheduledTime'] as String?;
+      if (scheduledTimeStr != null) {
+        final scheduledTime = DateTime.tryParse(scheduledTimeStr);
+        if (scheduledTime != null) {
+          final timeFormat = settings.show24HourTime ? 'HH:mm' : 'h:mm a';
+          final formattedTime = DateFormat(timeFormat).format(scheduledTime);
+          parts.add('Scheduled for $formattedTime.');
+        }
+      }
+
+      if (settings.readDescription) {
+        final desc = (task['description'] ?? '').toString().trim();
+        if (desc.isNotEmpty) parts.add(desc);
+      }
+      
+      return parts.join('. ');
+    } catch (e) {
+      AppLogger.error('Error building speech text: $e');
+      return '';
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -277,10 +351,31 @@ class FakeCallService {
       await _tts.setVolume(1.0);
       await _tts.setPitch(1.0);
       _isTtsInitialized = true;
+
+      // Pre-warm the engine: fire a near-silent utterance immediately so the
+      // platform TTS engine's synthesis pipeline is already hot by the time
+      // a real "answer" utterance needs to play with no perceptible delay.
+      // Wrapped separately so a pre-warm failure doesn't flip
+      // _isTtsInitialized back to false.
+      _prewarmTts().catchError((e) => AppLogger.error('TTS pre-warm failed: $e'));
+
       AppLogger.info('TTS initialized');
     } catch (e) {
       AppLogger.error('TTS initialization failed: $e');
       _isTtsInitialized = false;
+    }
+  }
+
+  Future<void> _prewarmTts() async {
+    try {
+      await _tts.speak(' ');
+      await _tts.stop();
+      AppLogger.info('TTS pre-warmed');
+    } catch (e) {
+      // Non-fatal — pre-warming is a best-effort latency optimization.
+      // Some engines lazy-init on the first *real* speak() regardless,
+      // in which case this is a harmless no-op.
+      AppLogger.warning('TTS pre-warm skipped/failed: $e');
     }
   }
 
@@ -347,7 +442,10 @@ class FakeCallService {
     required DateTime scheduledTime,
     String callerName = 'Task Reminder',
     String? ringtonePath,
+    bool vibrationEnabled = true,
     RecurrenceType? recurrence,
+    List<int>? weekdays,
+    DateTime? specificDate,
   }) async {
     // ✅ Resolve content:// URI to an absolute path NOW, while we have
     // permission. Background contexts cannot read content:// URIs.
@@ -367,7 +465,10 @@ class FakeCallService {
         'scheduledTime': scheduledTime.toIso8601String(),
         'callerName': callerName,
         'ringtonePath': resolvedRingtonePath,
+        'vibrationEnabled': vibrationEnabled,
         'recurrence': recurrence != null ? recurrenceToString(recurrence) : null,
+        'weekdays': weekdays ?? [],
+        'specificDate': specificDate?.toIso8601String(),
       });
       _navigateToCallScreen(payload);
       return;
@@ -380,7 +481,10 @@ class FakeCallService {
       scheduledTime: scheduledTime,
       callerName: callerName,
       ringtonePath: resolvedRingtonePath,
+      vibrationEnabled: vibrationEnabled,
       recurrence: recurrence,
+      weekdays: weekdays,
+      specificDate: specificDate,
     );
 
     AppLogger.info('Fake call scheduled: $title in ${delay.inMinutes}min');
@@ -391,162 +495,19 @@ class FakeCallService {
   // ---------------------------------------------------------------------------
 
   /// Reschedule all active loop tasks on app resume or after permission grant.
+  /// DEPRECATED: This logic is now handled by LoopBloc listening to the task stream.
+  @Deprecated('Use LoopBloc to handle task scheduling from stream')
   Future<void> rescheduleLoopTasks(List<TaskLoopItem> tasks) async {
-    try {
-      final activeTasks = tasks.where((t) => t.isActive).toList();
-
-      if (activeTasks.isEmpty) {
-        AppLogger.info('No active loop tasks to reschedule');
-        return;
-      }
-
-      AppLogger.info('Rescheduling ${activeTasks.length} active loop tasks');
-
-      for (final task in activeTasks) {
-        try {
-          // ✅ FIX: use _parseTimeString instead of raw split/parse.
-          //
-          // Previously:
-          //   final timeParts = task.timeString.split(':');
-          //   int hour = int.parse(timeParts[0]);
-          //   final minute = int.parse(timeParts[1]);   ← RangeError when no ':'
-          //
-          // If timeString has no ':' (e.g. '', '1200', or a value that came
-          // back from Firestore/cache in an unexpected format), split(':')
-          // returns a 1-element list. Accessing index [1] throws:
-          //   RangeError (length): Invalid value: Only valid value is 0: 1
-          final parsed = _parseTimeString(task.timeString, task.id);
-          if (parsed == null) {
-            // _parseTimeString already logged the specific reason.
-            AppLogger.error(
-              '[FakeCallService] Skipping reschedule for task "${task.title}" '
-                  '(id=${task.id}) — fix timeString="${task.timeString}" in Firestore/cache.',
-            );
-            continue;
-          }
-
-          // Convert 12-hour (hour, period) → 24-hour
-          int hour = parsed.hour;
-          final minute = parsed.minute;
-
-          if (task.period == 'PM' && hour != 12) {
-            hour += 12;
-          } else if (task.period == 'AM' && hour == 12) {
-            hour = 0;
-          }
-
-          final now = DateTime.now();
-          var scheduledTime = DateTime(
-            now.year,
-            now.month,
-            now.day,
-            hour,
-            minute,
-          );
-
-          // If time has passed today, schedule for tomorrow
-          if (scheduledTime.isBefore(now)) {
-            scheduledTime = scheduledTime.add(const Duration(days: 1));
-          }
-
-          // For recurring tasks, calculate next occurrence
-          if (task.recurrence == RecurrenceType.weekly) {
-            // Add 7 days for weekly tasks (simplified; could be optimized for specific days)
-            scheduledTime = scheduledTime.add(const Duration(days: 7));
-          } else if (task.recurrence == RecurrenceType.monthly) {
-            // Add 30 days for monthly tasks (simplified)
-            scheduledTime = scheduledTime.add(const Duration(days: 30));
-          }
-
-          await scheduleFakeCall(
-            taskId: task.id,
-            title: task.title,
-            description:
-            'Recurring ${task.recurrence.toString().split('.').last}: ${task.customDaysDisplay}',
-            scheduledTime: scheduledTime,
-            callerName: 'Loop Task',
-            recurrence: task.recurrence,
-          );
-
-          AppLogger.info(
-            'Rescheduled loop task: ${task.title} at ${task.timeString}',
-          );
-        } catch (e) {
-          AppLogger.error('Error rescheduling individual loop task: $e');
-        }
-      }
-
-      AppLogger.info('Loop tasks rescheduling completed');
-    } catch (e) {
-      AppLogger.error('Error rescheduling loop tasks: $e');
-    }
+    // This is now redundant as LoopBloc's _onLoadLoops handles scheduling
+    // from the repository stream which is triggered on startup and auth.
+    AppLogger.info('rescheduleLoopTasks called but is deprecated. LoopBloc handles scheduling.');
   }
 
   /// Batch schedule multiple loop tasks at once.
+  /// DEPRECATED: This logic is now handled by LoopBloc listening to the task stream.
+  @Deprecated('Use LoopBloc to handle task scheduling from stream')
   Future<void> batchScheduleLoopTasks(List<TaskLoopItem> tasks) async {
-    try {
-      AppLogger.info('Batch scheduling ${tasks.length} loop tasks');
-
-      for (final task in tasks) {
-        if (task.isActive) {
-          try {
-            // ✅ FIX: same _parseTimeString guard as rescheduleLoopTasks.
-            //
-            // Previously:
-            //   final timeParts = task.timeString.split(':');
-            //   int hour = int.parse(timeParts[0]);
-            //   final minute = int.parse(timeParts[1]);   ← RangeError when no ':'
-            final parsed = _parseTimeString(task.timeString, task.id);
-            if (parsed == null) {
-              AppLogger.error(
-                '[FakeCallService] Skipping batch schedule for task "${task.title}" '
-                    '(id=${task.id}) — fix timeString="${task.timeString}" in Firestore/cache.',
-              );
-              continue;
-            }
-
-            // Convert 12-hour (hour, period) → 24-hour
-            int hour = parsed.hour;
-            final minute = parsed.minute;
-
-            if (task.period == 'PM' && hour != 12) {
-              hour += 12;
-            } else if (task.period == 'AM' && hour == 12) {
-              hour = 0;
-            }
-
-            final now = DateTime.now();
-            var scheduledTime = DateTime(
-              now.year,
-              now.month,
-              now.day,
-              hour,
-              minute,
-            );
-
-            if (scheduledTime.isBefore(now)) {
-              scheduledTime = scheduledTime.add(const Duration(days: 1));
-            }
-
-            await scheduleFakeCall(
-              taskId: task.id,
-              title: task.title,
-              description:
-              'Loop: ${task.recurrence.toString().split('.').last}',
-              scheduledTime: scheduledTime,
-              callerName: 'Loop Task Reminder',
-              recurrence: task.recurrence,
-            );
-          } catch (e) {
-            AppLogger.error('Error scheduling loop task ${task.id}: $e');
-          }
-        }
-      }
-
-      AppLogger.info('Batch scheduling completed for ${tasks.length} tasks');
-    } catch (e) {
-      AppLogger.error('Error in batch schedule loop tasks: $e');
-    }
+    AppLogger.info('batchScheduleLoopTasks called but is deprecated.');
   }
 
   // ---------------------------------------------------------------------------

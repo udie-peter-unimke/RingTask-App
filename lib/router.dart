@@ -10,6 +10,10 @@ import 'package:ringtask/presentation/screens/loop/loop_screen.dart';
 import 'package:ringtask/presentation/screens/settings/settings_screen.dart';
 import 'package:ringtask/presentation/screens/fake_call/fake_call_screen.dart';
 import 'package:ringtask/presentation/screens/tts/tts_notification_screen.dart';
+import 'package:ringtask/presentation/screens/subscription/subscription_screen.dart';
+import 'package:ringtask/blocs/subscription/subscription_bloc.dart';
+import 'package:ringtask/core/di/service_locator.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ringtask/utils/logger.dart';
 
 class AppRouter {
@@ -25,6 +29,7 @@ class AppRouter {
   static const String fakeCallRoute = '/fake-call';
   static const String voiceRoute = '/voice';
   static const String ttsRoute = '/tts';
+  static const String subscriptionRoute = '/subscription';
 
   /// Generate routes based on route name and arguments
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -60,7 +65,7 @@ class AppRouter {
           final args = settings.arguments as Map<String, dynamic>?;
           return _buildRoute(
             settings,
-            FakeCallScreen(data: args ?? {}),
+            FakeCallScreen(payload: args),
           );
 
         case voiceRoute:
@@ -69,11 +74,39 @@ class AppRouter {
         case ttsRoute:
           final args = settings.arguments as Map<String, dynamic>?;
           final isOverlay = args?['isFullScreenOverlay'] ?? false;
+          final skipAutoSpeak = args?['skipAutoSpeak'] ?? false;
+          
+          if (isOverlay) {
+            // Use a smoother fade transition for the fullscreen overlay
+            return PageRouteBuilder(
+              settings: settings,
+              pageBuilder: (context, animation, secondaryAnimation) => TtsNotificationScreen(
+                currentTask: args ?? {},
+                isFullScreenOverlay: true,
+                skipAutoSpeak: skipAutoSpeak,
+              ),
+              transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                return FadeTransition(opacity: animation, child: child);
+              },
+              transitionDuration: const Duration(milliseconds: 120),
+            );
+          }
+          
           return _buildRoute(
             settings,
             TtsNotificationScreen(
               currentTask: args ?? {},
-              isFullScreenOverlay: isOverlay,
+              isFullScreenOverlay: false,
+              skipAutoSpeak: skipAutoSpeak,
+            ),
+          );
+
+        case subscriptionRoute:
+          return _buildRoute(
+            settings,
+            BlocProvider(
+              create: (context) => getIt<SubscriptionBloc>(),
+              child: const SubscriptionScreen(),
             ),
           );
 

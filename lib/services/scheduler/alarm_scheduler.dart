@@ -10,7 +10,7 @@ class AlarmScheduler {
 
   Future<void> initialize() async {
     // flutterReady is sent by FakeCallService.initialize() after the
-    // method call handler is registered — do not call it here.
+    // method call handler is registered � do not call it here.
     AppLogger.info('AlarmScheduler initialized successfully');
   }
 
@@ -21,7 +21,10 @@ class AlarmScheduler {
     required DateTime scheduledTime,
     String callerName = 'RingTask Reminder',
     String? ringtonePath,
+    bool vibrationEnabled = true,
     RecurrenceType? recurrence,
+    List<int>? weekdays,
+    DateTime? specificDate,
   }) async {
     try {
       final delay = scheduledTime.difference(DateTime.now());
@@ -44,7 +47,10 @@ class AlarmScheduler {
           'scheduledTime': scheduledTime.toIso8601String(),
           'callerName': callerName,
           'ringtonePath': ringtonePath,
+          'vibrationEnabled': vibrationEnabled,
           'recurrence': recurrence != null ? recurrenceToString(recurrence) : null,
+          'weekdays': weekdays ?? [],
+          'specificDate': specificDate?.toIso8601String(),
         }),
       });
 
@@ -68,7 +74,7 @@ class AlarmScheduler {
   }
 
   Future<void> cancelAllFakeCalls() async {
-    // ⚠️ Only cancels the default-tag alarm — task-specific alarms
+    // ?? Only cancels the default-tag alarm � task-specific alarms
     // must be cancelled individually via cancelScheduledCall(taskId)
     try {
       await _channel.invokeMethod('cancelFakeCall', {'tag': 'fakeCall'});
@@ -85,6 +91,10 @@ class AlarmScheduler {
     required DateTime newScheduledTime,
     String callerName = 'RingTask Reminder',
     String? ringtonePath,
+    bool vibrationEnabled = true,
+    RecurrenceType? recurrence,
+    List<int>? weekdays,
+    DateTime? specificDate,
   }) async {
     await cancelScheduledCall(taskId);
     return scheduleCall(
@@ -94,6 +104,10 @@ class AlarmScheduler {
       scheduledTime: newScheduledTime,
       callerName: callerName,
       ringtonePath: ringtonePath,
+      vibrationEnabled: vibrationEnabled,
+      recurrence: recurrence,
+      weekdays: weekdays,
+      specificDate: specificDate,
     );
   }
 }

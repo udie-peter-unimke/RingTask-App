@@ -2,7 +2,7 @@
 <resources>
     <!-- LAUNCH THEME (Splash Screen) -->
     <style name="LaunchTheme" parent="Theme.AppCompat.Light.NoActionBar">
-        <item name="android:windowBackground">@color/black</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
     </style>
 
     <!-- NORMAL THEME (Main App) -->

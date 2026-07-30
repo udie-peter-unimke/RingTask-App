@@ -1,9 +1,11 @@
 // lib/data/models/loop_model.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:equatable/equatable.dart';
+import 'package:intl/intl.dart';
 import 'package:ringtask/utils/logger.dart';
 
-enum RecurrenceType { daily, weekly, monthly }
+// Add oneTime to enum
+enum RecurrenceType { daily, weekly, monthly, oneTime }
 
 RecurrenceType recurrenceFromString(String s) {
   switch (s) {
@@ -11,6 +13,8 @@ RecurrenceType recurrenceFromString(String s) {
       return RecurrenceType.weekly;
     case 'monthly':
       return RecurrenceType.monthly;
+    case 'one_time':
+      return RecurrenceType.oneTime;
     case 'daily':
     default:
       return RecurrenceType.daily;
@@ -23,6 +27,8 @@ String recurrenceToString(RecurrenceType r) {
       return 'weekly';
     case RecurrenceType.monthly:
       return 'monthly';
+    case RecurrenceType.oneTime:
+      return 'one_time';
     case RecurrenceType.daily:
       return 'daily';
   }
@@ -37,6 +43,8 @@ class TaskLoopItem extends Equatable {
   final String customDaysDisplay;
   final bool isActive;
   final DateTime? updatedAt;
+  final List<int> weekdays;      // 1 = Monday, ..., 7 = Sunday (for weekly recurrence)
+  final DateTime? specificDate;  // for one-time tasks (or monthly specific date)
 
   const TaskLoopItem({
     required this.id,
@@ -46,7 +54,7 @@ class TaskLoopItem extends Equatable {
     required this.recurrence,
     required this.customDaysDisplay,
     required this.isActive,
-    this.updatedAt,
+    this.updatedAt, required this.weekdays, this.specificDate,
   });
 
   // ---------------------------------------------------------------------------
@@ -55,6 +63,21 @@ class TaskLoopItem extends Equatable {
 
   factory TaskLoopItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? <String, dynamic>{};
+    // read weekdays: expect a list of numbers (ints)
+    List<int> weekdays = [];
+    if (data['weekdays'] is List) {
+      try {
+        weekdays = (data['weekdays'] as List).whereType<num>().map((n) => n.toInt()).where((i) => i >= 1 && i <= 7).toList();
+      } catch (_) { weekdays = []; }
+    }
+
+    DateTime? specificDate;
+    if (data['specificDate'] is String) {
+      specificDate = DateTime.tryParse(data['specificDate'] as String);
+    } else if (data['specificDate'] is Timestamp) {
+      specificDate = (data['specificDate'] as Timestamp).toDate();
+    }
+
     return TaskLoopItem(
       id: doc.id,
       title: _safeString(data['title'], 'Untitled'),
@@ -62,6 +85,8 @@ class TaskLoopItem extends Equatable {
       period: _safePeriod(data['period'], doc.id),
       recurrence: recurrenceFromString(_safeString(data['recurrence'], 'daily')),
       customDaysDisplay: _safeString(data['customDaysDisplay'], 'Every Day'),
+      weekdays: weekdays,
+      specificDate: specificDate,
       isActive: _safeBool(data['isActive'], fallback: true),
       updatedAt: data['updatedAt'] is Timestamp
           ? (data['updatedAt'] as Timestamp).toDate()
@@ -72,7 +97,6 @@ class TaskLoopItem extends Equatable {
   // ---------------------------------------------------------------------------
   // Firestore serialization
   // ---------------------------------------------------------------------------
-
   Map<String, dynamic> toMap() {
     return {
       'title': title,
@@ -80,6 +104,8 @@ class TaskLoopItem extends Equatable {
       'period': period,
       'recurrence': recurrenceToString(recurrence),
       'customDaysDisplay': customDaysDisplay,
+      'weekdays': weekdays, // list of ints
+      'specificDate': specificDate?.toIso8601String(),
       'isActive': isActive,
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -94,6 +120,25 @@ class TaskLoopItem extends Equatable {
   /// [fromDoc] so a corrupt cached value never reaches split(':') downstream.
   factory TaskLoopItem.fromJson(Map<String, dynamic> json) {
     final contextId = json['id'] is String ? json['id'] as String : 'unknown';
+
+    List<int> weekdays = [];
+    if (json['weekdays'] is List) {
+      try {
+        weekdays = (json['weekdays'] as List)
+            .whereType<num>()
+            .map((n) => n.toInt())
+            .where((i) => i >= 1 && i <= 7)
+            .toList();
+      } catch (_) {
+        weekdays = [];
+      }
+    }
+
+    DateTime? specificDate;
+    if (json['specificDate'] is String) {
+      specificDate = DateTime.tryParse(json['specificDate'] as String);
+    }
+
     return TaskLoopItem(
       id: json['id'] is String ? json['id'] as String : '',
       title: _safeString(json['title'], 'Untitled'),
@@ -102,6 +147,8 @@ class TaskLoopItem extends Equatable {
       recurrence: recurrenceFromString(_safeString(json['recurrence'], 'daily')),
       customDaysDisplay: _safeString(json['customDaysDisplay'], 'Every Day'),
       isActive: _safeBool(json['isActive'], fallback: true),
+      weekdays: weekdays,
+      specificDate: specificDate,
       // tryParse (not parse) — a malformed ISO string returns null instead of
       // throwing FormatException and poisoning the whole cache read.
       updatedAt: json['updatedAt'] is String
@@ -122,6 +169,8 @@ class TaskLoopItem extends Equatable {
       'recurrence': recurrenceToString(recurrence),
       'customDaysDisplay': customDaysDisplay,
       'isActive': isActive,
+      'weekdays': weekdays,
+      'specificDate': specificDate?.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
     };
   }
@@ -139,6 +188,8 @@ class TaskLoopItem extends Equatable {
     String? customDaysDisplay,
     bool? isActive,
     DateTime? updatedAt,
+    List<int>? weekdays,
+    DateTime? specificDate,
   }) {
     return TaskLoopItem(
       id: id ?? this.id,
@@ -149,6 +200,8 @@ class TaskLoopItem extends Equatable {
       customDaysDisplay: customDaysDisplay ?? this.customDaysDisplay,
       isActive: isActive ?? this.isActive,
       updatedAt: updatedAt ?? this.updatedAt,
+      weekdays: weekdays ?? this.weekdays,
+      specificDate: specificDate ?? this.specificDate,
     );
   }
 
@@ -166,7 +219,68 @@ class TaskLoopItem extends Equatable {
     customDaysDisplay,
     isActive,
     updatedAt,
+    weekdays,
+    specificDate,
   ];
+
+  // ---------------------------------------------------------------------------
+  // Static Display Logic
+  // ---------------------------------------------------------------------------
+
+  /// Builds the display string for custom recurrence patterns
+  static String buildDaysDisplay({
+    required RecurrenceType recurrence,
+    required List<int> weekdays,
+    DateTime? specificDate,
+  }) {
+    if (recurrence == RecurrenceType.weekly) {
+      if (weekdays.isEmpty) return 'Weekly';
+
+      const weekdayOptions = [
+        {'label': 'Mon', 'day': 1},
+        {'label': 'Tue', 'day': 2},
+        {'label': 'Wed', 'day': 3},
+        {'label': 'Thu', 'day': 4},
+        {'label': 'Fri', 'day': 5},
+        {'label': 'Sat', 'day': 6},
+        {'label': 'Sun', 'day': 7},
+      ];
+
+      final selectedLabels = weekdays
+          .map((day) => weekdayOptions.firstWhere((e) => e['day'] == day)['label'] as String)
+          .toList();
+
+      return selectedLabels.join(', ');
+    }
+
+    if (recurrence == RecurrenceType.oneTime) {
+      return specificDate == null
+          ? 'One time'
+          : DateFormat.yMMMd().format(specificDate);
+    }
+
+    if (recurrence == RecurrenceType.monthly) {
+      if (specificDate == null) return 'Monthly';
+      final day = specificDate.day;
+      String suffix = 'th';
+      if (day < 11 || day > 13) {
+        switch (day % 10) {
+          case 1:
+            suffix = 'st';
+            break;
+          case 2:
+            suffix = 'nd';
+            break;
+          case 3:
+            suffix = 'rd';
+            break;
+        }
+      }
+      return 'Monthly on the $day$suffix';
+    }
+
+    return 'Every Day';
+  }
 
   // ---------------------------------------------------------------------------
   // Private field coercion helpers

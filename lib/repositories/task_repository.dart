@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:uuid/uuid.dart';
 import 'package:ringtask/data/datasources/local/cache_manager.dart';
 import 'package:ringtask/data/models/task_model.dart';
 import 'package:ringtask/services/firebase/firestore_service.dart';
@@ -346,6 +347,6 @@ class TaskRepository implements ITaskRepository {
   }
 
   String _generateDocId() {
-    return DateTime.now().millisecondsSinceEpoch.toString();
+    return const Uuid().v4();
   }
 }

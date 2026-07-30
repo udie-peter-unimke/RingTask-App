@@ -1,7 +1,7 @@
 import 'package:equatable/equatable.dart';
-import '../../data/models/loop_model.dart';
+import 'package:ringtask/data/models/loop_model.dart';
 
-/// Base class for all loop-related states
+// Base class for all loop-related states
 abstract class LoopState extends Equatable {
   const LoopState();
 
@@ -9,17 +9,17 @@ abstract class LoopState extends Equatable {
   List<Object?> get props => [];
 }
 
-/// Initial state before any data is loaded
+// Initial state before any data is loaded
 class LoopInitial extends LoopState {
   const LoopInitial();
 }
 
-/// Loading state while fetching tasks from Firestore
+// Loading state while fetching tasks from Firestore
 class LoopLoading extends LoopState {
   const LoopLoading();
 }
 
-/// Successfully loaded tasks from Firestore
+// Successfully loaded tasks from Firestore
 class LoopLoaded extends LoopState {
   final List<TaskLoopItem> tasks;
   final String? message; // For snackbars, success notifications
@@ -30,7 +30,7 @@ class LoopLoaded extends LoopState {
   List<Object?> get props => [tasks, message];
 }
 
-/// Error state when an operation fails
+// Error state when an operation fails
 class LoopError extends LoopState {
   final String message;
 

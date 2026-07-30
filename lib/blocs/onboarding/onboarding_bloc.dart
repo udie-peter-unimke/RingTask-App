@@ -11,7 +11,7 @@ class OnboardingBloc extends Bloc<OnboardingEvent, OnboardingState> {
   // Pass CacheManager into the constructor
   OnboardingBloc({required CacheManager cacheManager})
       : _cacheManager = cacheManager,
-        super(const OnboardingState()) {
+        super(const OnboardingState(totalPages: 8)) {
     on<OnboardingPageChanged>(_onPageChanged);
     on<OnboardingNextTapped>(_onNextTapped);
     on<OnboardingSkipTapped>(_onSkipTapped);

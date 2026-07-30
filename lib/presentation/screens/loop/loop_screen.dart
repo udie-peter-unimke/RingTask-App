@@ -1,10 +1,12 @@
+// lib/presentation/screens/loop/loop_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_auth/firebase_auth.dart' show FirebaseAuth;
 import 'package:ringtask/blocs/loop/loop_bloc.dart';
 import 'package:ringtask/blocs/loop/loop_event.dart';
 import 'package:ringtask/data/models/loop_model.dart';
 import 'package:ringtask/blocs/loop/loop_state.dart';
+import 'package:ringtask/presentation/widgets/loop_dialog.dart';
 
 class TaskLoopScreen extends StatefulWidget {
   const TaskLoopScreen({super.key});
@@ -17,7 +19,6 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
   @override
   void initState() {
     super.initState();
-    // Load tasks when screen initializes
     final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       context.read<LoopBloc>().add(LoadLoopsEvent(user.uid));
@@ -47,18 +48,13 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
         actions: [
           IconButton(
             icon: Icon(Icons.add_circle_outline, color: colorScheme.primary),
-            onPressed: () => _showCreateTaskDialog(context),
+            onPressed: () => TaskLoopDialog.show(context),
             tooltip: 'Add new task',
           ),
           IconButton(
-            icon: Icon(Icons.cloud_upload_outlined, color: colorScheme.secondary),
-            onPressed: () {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user != null) {
-                context.read<LoopBloc>().add(SeedSampleDataEvent(user.uid));
-              }
-            },
-            tooltip: 'Seed sample data',
+            icon: const Icon(Icons.delete_sweep_outlined, color: Colors.redAccent),
+            onPressed: () => _showClearAllConfirmation(context),
+            tooltip: 'Clear all tasks',
           ),
           const SizedBox(width: 8),
         ],
@@ -69,27 +65,33 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
           child: BlocConsumer<LoopBloc, LoopState>(
             listener: (context, state) {
               if (state is LoopError) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(state.message),
-                    backgroundColor: Colors.red,
-                  ),
-                );
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(state.message),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                });
               } else if (state is LoopLoaded && state.message != null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(state.message!),
-                    backgroundColor: Colors.green,
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(state.message!),
+                        backgroundColor: Colors.green,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                });
               }
             },
             builder: (context, state) {
               if (state is LoopInitial || state is LoopLoading) {
-                return const Center(
-                  child: CircularProgressIndicator(),
-                );
+                return const Center(child: CircularProgressIndicator());
               }
 
               if (state is LoopError) {
@@ -97,11 +99,7 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
-                        Icons.error_outline,
-                        color: Colors.redAccent,
-                        size: 48,
-                      ),
+                      const Icon(Icons.error_outline, color: Colors.redAccent, size: 48),
                       const SizedBox(height: 16),
                       Text(
                         state.message,
@@ -131,49 +129,25 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(
-                          Icons.inbox_outlined,
-                          color: Colors.grey,
-                          size: 64,
-                        ),
+                        const Icon(Icons.inbox_outlined, color: Colors.grey, size: 64),
                         const SizedBox(height: 16),
                         const Text(
                           'No tasks yet',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w500,
-                          ),
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
                         ),
                         const SizedBox(height: 8),
                         Text(
                           'Create a new task or load sample data',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.grey[600],
-                          ),
+                          style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                         ),
                         const SizedBox(height: 24),
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             ElevatedButton.icon(
-                              onPressed: () =>
-                                  _showCreateTaskDialog(context),
+                              onPressed: () => TaskLoopDialog.show(context),
                               icon: const Icon(Icons.add),
                               label: const Text('Create Task'),
-                            ),
-                            const SizedBox(width: 12),
-                            OutlinedButton.icon(
-                              onPressed: () {
-                                final user = FirebaseAuth.instance.currentUser;
-                                if (user != null) {
-                                  context
-                                      .read<LoopBloc>()
-                                      .add(SeedSampleDataEvent(user.uid));
-                                }
-                              },
-                              icon: const Icon(Icons.downloading),
-                              label: const Text('Load Samples'),
                             ),
                           ],
                         ),
@@ -189,19 +163,18 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                   itemBuilder: (context, index) {
                     final task = tasks[index];
                     return Padding(
+                      key: ValueKey(task.id),
                       padding: const EdgeInsets.only(bottom: 20.0),
-                      child: _buildTaskCard(
-                        context,
-                        task,
+                      child: LoopTaskCard(
+                        task: task,
+                        onDelete: () => _showDeleteConfirmation(context, task),
                       ),
                     );
                   },
                 );
               }
 
-              return const Center(
-                child: Text('Unknown state'),
-              );
+              return const Center(child: Text('Unknown state'));
             },
           ),
         ),
@@ -209,11 +182,69 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
     );
   }
 
-  /// Build individual task card with gestures and actions
-  Widget _buildTaskCard(
-      BuildContext context,
-      TaskLoopItem task,
-      ) {
+  void _showClearAllConfirmation(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Clear All Tasks'),
+        content: const Text(
+          'Are you sure you want to completely erase all alarms? This operation cannot be reversed.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              context.read<LoopBloc>().add(ClearAllTasksEvent(user.uid));
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('Clear All', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteConfirmation(BuildContext context, TaskLoopItem task) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete Task'),
+        content: Text('Are you sure you want to drop "${task.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              context.read<LoopBloc>().add(DeleteTaskEvent(userId: user.uid, taskId: task.id));
+              Navigator.pop(dialogContext);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class LoopTaskCard extends StatelessWidget {
+  final TaskLoopItem task;
+  final VoidCallback onDelete;
+
+  const LoopTaskCard({super.key, required this.task, required this.onDelete});
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
@@ -232,7 +263,6 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
       ),
       child: Stack(
         children: [
-          // Decorative background accent on the right
           Positioned(
             right: 0,
             top: 0,
@@ -252,19 +282,16 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
               ),
             ),
           ),
-          // Main content
           Padding(
             padding: const EdgeInsets.all(24.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Left side: task info
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Task title/label
                       Text(
                         task.title.toUpperCase(),
                         maxLines: 2,
@@ -277,7 +304,6 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                         ),
                       ),
                       const SizedBox(height: 4),
-                      // Time display
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.baseline,
                         textBaseline: TextBaseline.alphabetic,
@@ -307,7 +333,6 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                         ],
                       ),
                       const SizedBox(height: 4),
-                      // Recurrence display
                       Text(
                         task.customDaysDisplay,
                         style: TextStyle(
@@ -319,11 +344,9 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                     ],
                   ),
                 ),
-                // Right side: actions
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Toggle switch
                     Transform.scale(
                       scale: 1.1,
                       child: Switch(
@@ -336,182 +359,40 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
                           final user = FirebaseAuth.instance.currentUser;
                           if (user != null) {
                             context.read<LoopBloc>().add(
-                              ToggleTaskActiveEvent(
-                                userId: user.uid,
-                                task: task,
-                                value: value,
-                              ),
-                            );
+                                  ToggleTaskActiveEvent(
+                                    userId: user.uid,
+                                    task: task,
+                                    value: value,
+                                  ),
+                                );
                           }
                         },
                       ),
                     ),
-                    // Delete button
-                    IconButton(
-                      icon: const Icon(
-                        Icons.delete_outline,
-                        color: Colors.redAccent,
-                      ),
-                      onPressed: () => _showDeleteConfirmation(context, task),
-                      tooltip: 'Delete task',
-                      splashRadius: 24,
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Show dialog to create a new task
-  void _showCreateTaskDialog(BuildContext context) {
-    String title = '';
-    String timeString = '10:00';
-    String period = 'AM';
-    RecurrenceType recurrence = RecurrenceType.daily;
-    String customDaysDisplay = 'Every Day';
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('Create New Task'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Title input
-                TextField(
-                  onChanged: (value) {
-                    setDialogState(() => title = value);
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Task Title',
-                    hintText: 'e.g., Morning Meditation',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                // Time input
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        onChanged: (value) {
-                          setDialogState(() => timeString = value);
-                        },
-                        controller: TextEditingController(text: timeString),
-                        decoration: const InputDecoration(
-                          labelText: 'Time',
-                          hintText: 'HH:MM',
-                          border: OutlineInputBorder(),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: Icon(
+                            Icons.edit_outlined,
+                            color: colorScheme.onSurface.withValues(alpha: 0.6),
+                          ),
+                          onPressed: () => TaskLoopDialog.show(context, task: task),
+                          tooltip: 'Edit task',
+                          splashRadius: 24,
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    DropdownButton<String>(
-                      value: period,
-                      onChanged: (value) {
-                        setDialogState(() => period = value ?? 'AM');
-                      },
-                      items: const [
-                        DropdownMenuItem(value: 'AM', child: Text('AM')),
-                        DropdownMenuItem(value: 'PM', child: Text('PM')),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                          onPressed: onDelete,
+                          tooltip: 'Delete task',
+                          splashRadius: 24,
+                        ),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                // Recurrence dropdown
-                DropdownButtonFormField<RecurrenceType>(
-                  initialValue: recurrence,
-                  onChanged: (value) {
-                    setDialogState(() => recurrence = value ?? RecurrenceType.daily);
-                  },
-                  decoration: const InputDecoration(
-                    labelText: 'Recurrence',
-                    border: OutlineInputBorder(),
-                  ),
-                  items: const [
-                    DropdownMenuItem(
-                      value: RecurrenceType.daily,
-                      child: Text('Daily'),
-                    ),
-                    DropdownMenuItem(
-                      value: RecurrenceType.weekly,
-                      child: Text('Weekly'),
-                    ),
-                    DropdownMenuItem(
-                      value: RecurrenceType.monthly,
-                      child: Text('Monthly'),
-                    ),
-                  ],
-                ),
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: title.isEmpty
-                  ? null
-                  : () {
-                final user = FirebaseAuth.instance.currentUser;
-                if (user != null) {
-                  context.read<LoopBloc>().add(
-                    CreateTaskEvent(
-                      userId: user.uid,
-                      title: title,
-                      timeString: timeString,
-                      period: period,
-                      recurrence: recurrence,
-                      customDaysDisplay: customDaysDisplay,
-                    ),
-                  );
-                }
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Create'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// Show delete confirmation dialog
-  void _showDeleteConfirmation(BuildContext context, TaskLoopItem task) {
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete Task?'),
-        content: Text('Are you sure you want to delete "${task.title}"?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
-            onPressed: () {
-              final user = FirebaseAuth.instance.currentUser;
-              if (user != null) {
-                context.read<LoopBloc>().add(DeleteTaskEvent(
-                  userId: user.uid,
-                  taskId: task.id,
-                ));
-              }
-              Navigator.pop(dialogContext);
-            },
-            child: const Text('Delete', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -519,27 +400,17 @@ class _TaskLoopScreenState extends State<TaskLoopScreen> {
   }
 }
 
-/// Custom painter for card background accent
 class CardBackgroundPainter extends CustomPainter {
   final Color color;
-
-  CardBackgroundPainter({required this.color});
-
+  const CardBackgroundPainter({required this.color});
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
-    final path = Path();
-    path.moveTo(size.width, 0);
-    path.lineTo(size.width * 0.3, 0);
-    path.lineTo(size.width, size.height * 0.7);
-    path.close();
-
-    canvas.drawPath(path, paint);
+    final paint = Paint()..color = color;
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant CardBackgroundPainter oldDelegate) {
+    return oldDelegate.color != color;
+  }
 }

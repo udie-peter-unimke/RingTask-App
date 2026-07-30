@@ -2,17 +2,22 @@
 
 import 'dart:async';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:ringtask/data/datasources/local/subscription_local_datasource.dart';
+import 'package:ringtask/data/datasources/remote/subscription_remote_datasource.dart';
 import 'package:ringtask/entities/subscription_entities.dart';
 import 'package:ringtask/repositories/subscription/subscription_repository.dart';
-import 'package:ringtask/services/firebase/firestore_service.dart';
 import 'package:ringtask/utils/logger.dart';
 
 class SubscriptionRepositoryImpl implements SubscriptionRepository {
   final InAppPurchase _iap = InAppPurchase.instance;
-  final FirestoreService _firestoreService;
+  final SubscriptionRemoteDataSource _remoteDataSource;
+  final SubscriptionLocalDataSource _localDataSource;
 
-  SubscriptionRepositoryImpl({required FirestoreService firestoreService})
-      : _firestoreService = firestoreService;
+  SubscriptionRepositoryImpl({
+    required SubscriptionRemoteDataSource remoteDataSource,
+    required SubscriptionLocalDataSource localDataSource,
+  })  : _remoteDataSource = remoteDataSource,
+        _localDataSource = localDataSource;
 
   @override
   Future<List<ProductDetails>> getProducts() async {
@@ -75,20 +80,34 @@ class SubscriptionRepositoryImpl implements SubscriptionRepository {
   @override
   Future<SubscriptionStatus> getSubscriptionStatus(String uid) async {
     try {
-      final data = await _firestoreService.getUserData(uid);
-      if (data == null) return SubscriptionStatus.defaultFree;
+      // 1. Try to get from local cache first for instant UI response
+      final localStatus = await _localDataSource.getSubscriptionStatus();
+      if (localStatus != null) {
+        AppLogger.info('Retrieved subscription status from local cache: $localStatus');
+      }
+
+      // 2. Fetch from Remote
+      final remoteStatus = await _remoteDataSource.getSubscriptionStatus(uid);
+      if (remoteStatus == null) return localStatus ?? SubscriptionStatus.defaultFree;
       
-      return SubscriptionStatus.fromFirestore(data);
+      // 3. Update local cache with remote data
+      await _localDataSource.saveSubscriptionStatus(remoteStatus);
+      
+      return remoteStatus;
     } catch (e) {
       AppLogger.error('Failed to get subscription status for $uid: $e');
-      return SubscriptionStatus.defaultFree;
+      return (await _localDataSource.getSubscriptionStatus()) ?? SubscriptionStatus.defaultFree;
     }
   }
 
   @override
   Future<void> saveSubscriptionStatus(String uid, SubscriptionStatus status) async {
     try {
-      await _firestoreService.updateUserData(uid, status.toFirestore());
+      // Save to both remote and local
+      await Future.wait([
+        _remoteDataSource.saveSubscriptionStatus(uid, status),
+        _localDataSource.saveSubscriptionStatus(status),
+      ]);
       AppLogger.info('Successfully saved subscription status for $uid: $status');
     } catch (e) {
       AppLogger.error('Failed to save subscription status for $uid: $e');

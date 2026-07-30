@@ -104,12 +104,6 @@
             android:launchMode="singleInstance"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|uiMode"/>
 
-        <!-- Foreground Service -->
-        <service
-            android:name=".FakeCallService"
-            android:foregroundServiceType="mediaPlayback"
-            android:exported="false"/>
-
         <!-- Flutter Local Notifications -->
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"

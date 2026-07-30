@@ -11,6 +11,7 @@ import 'package:ringtask/blocs/settings/settings_bloc.dart';
 import 'package:ringtask/blocs/settings/settings_event.dart';
 import 'package:ringtask/blocs/settings/settings_state.dart';
 import 'package:ringtask/data/models/settings_model.dart';
+import 'package:ringtask/router.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -437,6 +438,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                _buildSectionHeader('Premium'),
+                _buildCard([
+                  _buildNavTile(
+                    icon: Icons.star_rounded,
+                    title: 'Upgrade to Premium',
+                    onTap: () => Navigator.pushNamed(context, AppRouter.subscriptionRoute),
+                  ),
+                ]),
+                const SizedBox(height: 20),
                 _buildSectionHeader('Account Settings'),
                 _buildCard([
                   _buildNavTile(

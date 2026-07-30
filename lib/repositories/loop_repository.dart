@@ -15,12 +15,19 @@ class LoopRepository {
         _remoteDataSource = remoteDataSource;
 
   /// Get stream of tasks with fallback to cache if offline
-  Stream<List<TaskLoopItem>> getTasksStream(String userId) {
-    return _remoteDataSource.getTasksStream(userId).handleError(
+  Stream<List<TaskLoopItem>> getTasksStream(String userId) async* {
+    // 🚀 CACHE FIRST: Yield cached tasks immediately
+    final cached = await _localDataSource.getCachedTasks();
+    if (cached.isNotEmpty) {
+      yield cached;
+    }
+
+    // ☁️ THEN REMOTE: Listen to remote changes
+    yield* _remoteDataSource.getTasksStream(userId).handleError(
           (error) async* {
-        // On error, emit cached tasks
-        final cachedTasks = await _localDataSource.getCachedTasks();
-        yield cachedTasks;
+        // On error, emit cached tasks if we haven't already or to ensure state
+        final latestCached = await _localDataSource.getCachedTasks();
+        yield latestCached;
       },
     );
   }
@@ -74,27 +81,31 @@ class LoopRepository {
   /// Delete a task locally and remotely
   Future<void> deleteTask(String userId, String taskId) async {
     try {
-      // Remove locally first
+      // Remove locally first for immediate UI update
       await _localDataSource.removeTaskFromCache(taskId);
 
-      // Then delete remotely
-      await _remoteDataSource.deleteTask(userId, taskId);
+      // Then delete remotely in background (fire and forget)
+      _backgroundDeleteTask(userId, taskId);
     } catch (e) {
-      // Local delete succeeds, remote queued for retry
       rethrow;
     }
   }
 
-  /// Batch create multiple tasks
-  Future<void> batchCreateTasks(String userId, List<TaskLoopItem> tasks) async {
+  Future<void> _backgroundDeleteTask(String userId, String taskId) async {
     try {
-      // Cache locally first
-      await _localDataSource.cacheTasks(tasks);
-
-      // Then create remotely
-      await _remoteDataSource.batchCreateTasks(userId, tasks);
+      await _remoteDataSource.deleteTask(userId, taskId);
     } catch (e) {
-      // Local cache succeeds, remote queued for retry
+      // Remote sync fails, should be handled by a general sync service later
+      // For now we log it or let the user know via BLoC if needed
+    }
+  }
+
+  /// Clear all tasks locally and remotely
+  Future<void> clearAllTasks(String userId) async {
+    try {
+      await _localDataSource.clearCache();
+      await _remoteDataSource.clearAllTasks(userId);
+    } catch (e) {
       rethrow;
     }
   }
