@@ -1,6 +1,5 @@
 // lib/core/theme/theme_service.dart
 import 'package:flutter/material.dart';
-
 import 'package:ringtask/data/models/settings_model.dart';
 import 'app_theme.dart';
 
@@ -24,31 +23,27 @@ extension ThemeService on SettingsModel {
   // ──────────────────────  PRIMARY COLOR  ─────────────────── //
   /// Parses hex string like "#FF0066" or "0xFF0066FF" → Color
   Color? get primaryColorValue {
-    if (primaryColor == null) return null;
-    final String hex = primaryColor!
-        .replaceFirst('#', '')
-        .replaceFirst('0x', '');
-    if (hex.length != 6 && hex.length != 8) return null;
-    final int? value = int.tryParse(hex, radix: 16);
-    if (value == null) return null;
-    return Color(hex.length == 6 ? 0xFF000000 + value : value);
+    if (primaryColor == null || primaryColor!.isEmpty) return null;
+    try {
+      final String hex = primaryColor!
+          .replaceFirst('#', '')
+          .replaceFirst('0x', '');
+      if (hex.length != 6 && hex.length != 8) return null;
+      final int? value = int.tryParse(hex, radix: 16);
+      if (value == null) return null;
+      return Color(hex.length == 6 ? 0xFF000000 + value : value);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ──────────────────────  BASE THEME  ────────────────────── //
-  /// Resolves light/dark/system → correct AppTheme
-  ThemeData _baseTheme(BuildContext context) {
-    // Resolve system brightness
-    final Brightness platform = MediaQuery.platformBrightnessOf(context);
-    final String effectiveMode = isSystemMode
-        ? (platform == Brightness.dark ? 'dark' : 'light')
-        : themeMode;
-
-    // Pick base theme
-    final ThemeData base = switch (effectiveMode) {
-      'light' => AppTheme.light,
-      'dark'  => AppTheme.dark,
-      'oled'  => AppTheme.oled,
-      _       => AppTheme.light,
+  /// Resolves requested brightness to correct AppTheme without requiring BuildContext.
+  ThemeData _baseThemeForBrightness(Brightness brightness) {
+    // Pick base theme based on brightness and special OLED mode
+    final ThemeData base = switch (brightness) {
+      Brightness.light => AppTheme.light,
+      Brightness.dark  => themeMode == 'oled' ? AppTheme.oled : AppTheme.dark,
     };
 
     // Apply dynamic primary colour if set
@@ -64,12 +59,9 @@ extension ThemeService on SettingsModel {
   }
 
   // ──────────────────────  FINAL THEME  ───────────────────── //
-  /// Returns fully configured ThemeData with:
-  /// - System / dark / light / oled
-  /// - Dynamic primary colour
-  /// - Font scaling
-  ThemeData finalTheme(BuildContext context) {
-    final ThemeData base = _baseTheme(context);
+  /// Returns fully configured ThemeData for a specific brightness.
+  ThemeData finalThemeForBrightness(Brightness brightness) {
+    final ThemeData base = _baseThemeForBrightness(brightness);
     return base.copyWith(
       textTheme: base.textTheme.apply(fontSizeFactor: fontSize),
     );
@@ -84,5 +76,12 @@ extension ThemeService on SettingsModel {
       'system' => 'System Default',
       _        => 'Unknown',
     };
+  }
+
+  /// Deprecated: Use [finalThemeForBrightness] instead to avoid MediaQuery dependency.
+  @Deprecated('Use finalThemeForBrightness(brightness) to avoid assertion errors')
+  ThemeData finalTheme(BuildContext context) {
+    final Brightness brightness = MediaQuery.platformBrightnessOf(context);
+    return finalThemeForBrightness(brightness);
   }
 }

@@ -1,6 +1,10 @@
 // lib/blocs/loop/loop_bloc.dart
 import 'package:bloc/bloc.dart';
+import 'package:bloc_concurrency/bloc_concurrency.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:ringtask/repositories/settings_repository.dart';
 import 'package:ringtask/repositories/loop_repository.dart';
+import 'package:ringtask/services/entitlement/entitlement_service.dart';
 import 'package:ringtask/services/firebase/fake_call_service.dart';
 import 'package:ringtask/utils/logger.dart';
 import 'loop_event.dart';
@@ -10,19 +14,24 @@ import 'loop_state.dart';
 class LoopBloc extends Bloc<LoopEvent, LoopState> {
   final LoopRepository _repository;
   final FakeCallService _fakeCallService;
+  final EntitlementService _entitlementService;
+  final SettingsRepository _settingsRepository;
 
   LoopBloc({
     required LoopRepository repository,
     required FakeCallService fakeCallService,
+    required EntitlementService entitlementService,
+    required SettingsRepository settingsRepository,
   })  : _repository = repository,
         _fakeCallService = fakeCallService,
+        _entitlementService = entitlementService,
+        _settingsRepository = settingsRepository,
         super(const LoopInitial()) {
-    on<LoadLoopsEvent>(_onLoadLoops);
+    on<LoadLoopsEvent>(_onLoadLoops, transformer: restartable());
     on<ToggleTaskActiveEvent>(_onToggleTaskActive);
     on<DeleteTaskEvent>(_onDeleteTask);
     on<CreateTaskEvent>(_onCreateTask);
     on<UpdateTaskEvent>(_onUpdateTask);
-    on<SeedSampleDataEvent>(_onSeedSampleData);
     on<ClearAllTasksEvent>(_onClearAllTasks);
   }
 
@@ -31,16 +40,6 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
   // ---------------------------------------------------------------------------
 
   /// Safely parses a 12-hour [timeString] in 'H:mm' or 'HH:mm' format.
-  ///
-  /// Returns a `(hour, minute)` record on success, or `null` if the value is
-  /// null, empty, missing the colon separator, non-numeric, or out of range.
-  ///
-  /// This is the single fix point for:
-  ///   RangeError (length): Invalid value: Only valid value is 0: 1
-  /// which fires when [timeString] contains no ':' — split(':') then returns a
-  /// 1-element list and accessing index [1] throws.
-  ///
-  /// [taskId] is used purely for log context.
   ({int hour, int minute})? _parseTimeString(
       String? timeString,
       String taskId,
@@ -53,10 +52,6 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
     final parts = timeString.split(':');
 
     if (parts.length < 2) {
-      // Root cause of the reported RangeError: a stored value with no ':'
-      // (e.g. '', '1200', a field missing from Firestore doc) produces a
-      // 1-element list. Accessing index [1] throws:
-      //   RangeError (length): Invalid value: Only valid value is 0: 1
       AppLogger.error(
         '[LoopBloc] Malformed timeString="$timeString" for task $taskId '
             '— no colon separator found. RangeError prevented.',
@@ -64,7 +59,6 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       return null;
     }
 
-    // Use tryParse, not parse — a non-numeric segment throws FormatException.
     final hour = int.tryParse(parts[0].trim());
     final minute = int.tryParse(parts[1].trim());
 
@@ -91,7 +85,6 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
   // Event handlers
   // ---------------------------------------------------------------------------
 
-  /// Load tasks and schedule active ones via FakeCallService.
   Future<void> _onLoadLoops(
       LoadLoopsEvent event,
       Emitter<LoopState> emit,
@@ -99,8 +92,8 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
     emit(const LoopLoading());
     try {
       await for (final tasks in _repository.getTasksStream(event.userId)) {
-        // Schedule all active tasks with FakeCallService
-        for (final task in tasks.where((t) => t.isActive)) {
+        final activeTasks = tasks.where((t) => t.isActive).toList();
+        for (final task in activeTasks) {
           await _scheduleTaskCall(task);
         }
         emit(LoopLoaded(tasks));
@@ -114,16 +107,24 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       ToggleTaskActiveEvent event,
       Emitter<LoopState> emit,
       ) async {
-    // ✅ FIX: capture state BEFORE any emit.
     final previousState = state;
     try {
       await _repository.toggleTaskActive(event.userId, event.task, event.value);
 
-      // If toggled on, schedule fake call; if off, cancel it
       if (event.value) {
         await _scheduleTaskCall(event.task);
       } else {
         await _fakeCallService.cancelTask(event.task.id);
+      }
+
+      if (previousState is LoopLoaded) {
+        final updatedTasks = previousState.tasks.map((t) {
+          return t.id == event.task.id ? t.copyWith(isActive: event.value) : t;
+        }).toList();
+        emit(LoopLoaded(
+          updatedTasks,
+          message: 'Task ${event.value ? "activated" : "deactivated"}',
+        ));
       }
     } catch (e) {
       AppLogger.error('Failed to toggle task: $e');
@@ -136,11 +137,15 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       DeleteTaskEvent event,
       Emitter<LoopState> emit,
       ) async {
-    // ✅ FIX: same state-restore fix as _onToggleTaskActive.
     final previousState = state;
     try {
       await _fakeCallService.cancelTask(event.taskId);
       await _repository.deleteTask(event.userId, event.taskId);
+
+      if (previousState is LoopLoaded) {
+        final updatedTasks = previousState.tasks.where((t) => t.id != event.taskId).toList();
+        emit(LoopLoaded(updatedTasks, message: 'Task deleted'));
+      }
     } catch (e) {
       AppLogger.error('Failed to delete task: $e');
       emit(LoopError('Failed to delete task: $e'));
@@ -152,8 +157,14 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       CreateTaskEvent event,
       Emitter<LoopState> emit,
       ) async {
-    // ✅ FIX: same state-restore fix.
     final previousState = state;
+
+    if (!_entitlementService.canUseRecurrenceType(event.recurrence)) {
+      emit(LoopError('Recurrence type "${event.recurrence.name}" is a Premium feature.'));
+      if (previousState is LoopLoaded) emit(previousState);
+      return;
+    }
+
     try {
       final newTask = TaskLoopItem(
         id: '',
@@ -163,12 +174,13 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
         recurrence: event.recurrence,
         customDaysDisplay: event.customDaysDisplay,
         isActive: true,
+        weekdays: event.weekdays,
+        specificDate: event.specificDate,
       );
 
       final id = await _repository.createTask(event.userId, newTask);
       final taskWithId = newTask.copyWith(id: id);
 
-      // Schedule the newly created task
       await _scheduleTaskCall(taskWithId);
 
       if (previousState is LoopLoaded) {
@@ -188,92 +200,31 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       UpdateTaskEvent event,
       Emitter<LoopState> emit,
       ) async {
-    // ✅ FIX: same state-restore fix.
     final previousState = state;
+
+    if (!_entitlementService.canUseRecurrenceType(event.task.recurrence)) {
+      emit(LoopError('Recurrence type "${event.task.recurrence.name}" is a Premium feature.'));
+      if (previousState is LoopLoaded) emit(previousState);
+      return;
+    }
+
     try {
       await _repository.updateTask(event.userId, event.task);
 
-      // Reschedule with updated details
       if (event.task.isActive) {
         await _fakeCallService.cancelTask(event.task.id);
         await _scheduleTaskCall(event.task);
       }
+
+      if (previousState is LoopLoaded) {
+        final updatedTasks = previousState.tasks.map((t) {
+          return t.id == event.task.id ? event.task : t;
+        }).toList();
+        emit(LoopLoaded(updatedTasks, message: 'Task updated'));
+      }
     } catch (e) {
       AppLogger.error('Failed to update task: $e');
       emit(LoopError('Failed to update task: $e'));
-      if (previousState is LoopLoaded) emit(previousState);
-    }
-  }
-
-  Future<void> _onSeedSampleData(
-      SeedSampleDataEvent event,
-      Emitter<LoopState> emit,
-      ) async {
-    // ✅ FIX: same state-restore fix.
-    final previousState = state;
-    try {
-      final cachedTasks = await _repository.getCachedTasks();
-      if (cachedTasks.isNotEmpty) return;
-
-      final sample = [
-        TaskLoopItem(
-          id: '',
-          title: 'FRI-SUN PROJECT REVIEW',
-          timeString: '12:00',
-          period: 'PM',
-          recurrence: RecurrenceType.weekly,
-          customDaysDisplay: 'Every Day',
-          isActive: true,
-        ),
-        TaskLoopItem(
-          id: '',
-          title: 'HEALTH & PERSONAL MEDITATION',
-          timeString: '6:00',
-          period: 'AM',
-          recurrence: RecurrenceType.daily,
-          customDaysDisplay: 'Every Day',
-          isActive: true,
-        ),
-        TaskLoopItem(
-          id: '',
-          title: 'WAKE UP & STRETCH',
-          timeString: '7:30',
-          period: 'AM',
-          recurrence: RecurrenceType.daily,
-          customDaysDisplay: 'Every Day',
-          isActive: true,
-        ),
-        TaskLoopItem(
-          id: '',
-          title: 'DO TO WORKSPACE',
-          timeString: '9:00',
-          period: 'AM',
-          recurrence: RecurrenceType.weekly,
-          customDaysDisplay: 'Mon, Tue, Wed, Thu, Fri, Sat',
-          isActive: false,
-        ),
-        TaskLoopItem(
-          id: '',
-          title: 'LEAVE WORKSPACE',
-          timeString: '6:00',
-          period: 'PM',
-          recurrence: RecurrenceType.weekly,
-          customDaysDisplay: 'Mon, Tue, Wed, Thu, Fri, Sat',
-          isActive: false,
-        ),
-      ];
-
-      await _repository.batchCreateTasks(event.userId, sample);
-
-      if (previousState is LoopLoaded) {
-        emit(LoopLoaded(
-          previousState.tasks,
-          message: 'Sample tasks seeded',
-        ));
-      }
-    } catch (e) {
-      AppLogger.error('Failed to seed data: $e');
-      emit(LoopError('Failed to seed data: $e'));
       if (previousState is LoopLoaded) emit(previousState);
     }
   }
@@ -283,9 +234,12 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       Emitter<LoopState> emit,
       ) async {
     try {
-      await _fakeCallService.cancelAll();
-      await _repository.clearLocalCache();
-      emit(const LoopLoaded([]));
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        await _fakeCallService.cancelAll();
+        await _repository.clearAllTasks(user.uid);
+        emit(const LoopLoaded([], message: 'All tasks cleared'));
+      }
     } catch (e) {
       AppLogger.error('Failed to clear tasks: $e');
       emit(LoopError('Failed to clear tasks: $e'));
@@ -293,30 +247,29 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
   }
 
   // ---------------------------------------------------------------------------
+  // Monthly date helper
+  // ---------------------------------------------------------------------------
+
+  DateTime _createValidMonthlyDate(
+      int year,
+      int month,
+      int day,
+      int hour,
+      int minute,
+      ) {
+    final daysInMonth = DateTime(year, month + 1, 0).day;
+    final validDay = day > daysInMonth ? daysInMonth : day;
+    return DateTime(year, month, validDay, hour, minute);
+  }
+
+  // ---------------------------------------------------------------------------
   // Scheduling helper
   // ---------------------------------------------------------------------------
 
-  /// Schedule a task alarm via FakeCallService.
-  ///
-  /// Returns silently on parse failure — the error is logged with full context
-  /// so the offending task and its raw timeString value are visible in logcat.
-  /// A failed schedule does not propagate — other tasks in a batch continue.
   Future<void> _scheduleTaskCall(TaskLoopItem task) async {
     try {
-      // ✅ FIX: use _parseTimeString instead of raw split/parse.
-      //
-      // Previously:
-      //   final timeParts = task.timeString.split(':');
-      //   int hour = int.parse(timeParts[0]);
-      //   final minute = int.parse(timeParts[1]);   ← RangeError when no ':'
-      //
-      // If timeString has no ':' (e.g. '', '1200', or a Firestore field that
-      // came back in an unexpected format), split(':') returns a 1-element
-      // list. Accessing index [1] throws:
-      //   RangeError (length): Invalid value: Only valid value is 0: 1
       final parsed = _parseTimeString(task.timeString, task.id);
       if (parsed == null) {
-        // _parseTimeString already logged the specific reason and raw value.
         AppLogger.error(
           '[LoopBloc] Skipping schedule for task "${task.title}" (id=${task.id}) '
               '— fix timeString="${task.timeString}" in Firestore/cache.',
@@ -324,7 +277,6 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
         return;
       }
 
-      // Convert 12-hour (hour, period) → 24-hour
       int hour = parsed.hour;
       final minute = parsed.minute;
 
@@ -335,29 +287,108 @@ class LoopBloc extends Bloc<LoopEvent, LoopState> {
       }
 
       final now = DateTime.now();
-      var scheduledTime = DateTime(
-        now.year,
-        now.month,
-        now.day,
-        hour,
-        minute,
-      );
+      DateTime computed; // Changed from DateTime? to satisfy downstream requirements
 
-      // If time has passed today, schedule for tomorrow
-      if (scheduledTime.isBefore(now)) {
-        scheduledTime = scheduledTime.add(const Duration(days: 1));
+      if (task.recurrence == RecurrenceType.oneTime) {
+        if (task.specificDate == null) {
+          AppLogger.warning(
+            'One-time task has no specificDate; skipping schedule.',
+          );
+          return;
+        }
+
+        computed = DateTime(
+          task.specificDate!.year,
+          task.specificDate!.month,
+          task.specificDate!.day,
+          hour,
+          minute,
+        );
+
+        if (computed.isBefore(now)) {
+          AppLogger.info(
+            'One-time task ${task.title} scheduled date is in the past; skipping.',
+          );
+          return;
+        }
+      } else if (task.recurrence == RecurrenceType.weekly) {
+        if (task.weekdays.isEmpty) {
+          AppLogger.warning(
+            'Weekly task has no weekdays selected; defaulting to next occurrence (tomorrow).',
+          );
+          computed = DateTime(now.year, now.month, now.day, hour, minute);
+          if (computed.isBefore(now)) {
+            computed = computed.add(const Duration(days: 1));
+          }
+        } else {
+          final todayWeekday = now.weekday;
+          int daysUntil = 100;
+
+          for (final weekday in task.weekdays) {
+            final candidate = (weekday - todayWeekday) % 7;
+            final todayAtTaskTime = DateTime(
+              now.year,
+              now.month,
+              now.day,
+              hour,
+              minute,
+            );
+            final normalized =
+            candidate == 0 && todayAtTaskTime.isBefore(now)
+                ? 7
+                : candidate;
+            daysUntil = daysUntil < normalized ? daysUntil : normalized;
+          }
+
+          final targetDay = now.add(Duration(days: daysUntil));
+          computed = DateTime(
+            targetDay.year,
+            targetDay.month,
+            targetDay.day,
+            hour,
+            minute,
+          );
+        }
+      } else if (task.recurrence == RecurrenceType.monthly) {
+        final targetDay = task.specificDate?.day ?? now.day;
+
+        int year = now.year;
+        int month = now.month;
+
+        computed = _createValidMonthlyDate(year, month, targetDay, hour, minute);
+
+        if (computed.isBefore(now)) {
+          year = now.year;
+          month = now.month + 1;
+          if (month > 12) {
+            month = 1;
+            year += 1;
+          }
+          computed = _createValidMonthlyDate(year, month, targetDay, hour, minute);
+        }
+      } else {
+        computed = DateTime(now.year, now.month, now.day, hour, minute);
+        if (computed.isBefore(now)) {
+          computed = computed.add(const Duration(days: 1));
+        }
       }
+
+      final settings = await _settingsRepository.getSettings();
 
       await _fakeCallService.scheduleFakeCall(
         taskId: task.id,
         title: task.title,
         description: 'Recurring ${task.recurrence.toString().split('.').last}',
-        scheduledTime: scheduledTime,
-        callerName: 'Task Reminder',
+        scheduledTime: computed,
+        callerName: settings.defaultCallerName ?? 'Task Reminder',
+        ringtonePath: settings.fakeCallRingtone,
+        vibrationEnabled: settings.fakeCallVibrate,
         recurrence: task.recurrence,
+        weekdays: task.weekdays,
+        specificDate: task.specificDate,
       );
 
-      AppLogger.info('Task scheduled: ${task.title} at ${task.timeString}');
+      AppLogger.info('Task scheduled: ${task.title} at $computed');
     } catch (e) {
       AppLogger.error('Error scheduling task call: $e');
     }

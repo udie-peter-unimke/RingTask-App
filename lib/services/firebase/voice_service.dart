@@ -21,6 +21,7 @@ class VoiceService implements IVoiceService {
   bool _isInitializing = false;
   String _currentLocale = 'en_US';
   bool _hasResults = false;
+  double _lastConfidenceLevel = 0.0;
 
   VoiceService();
 
@@ -45,7 +46,9 @@ class VoiceService implements IVoiceService {
       );
 
       if (available) {
-        AppLogger.info('Speech-to-text service initialized in ${stopwatch.elapsedMilliseconds}ms');
+        AppLogger.info(
+          'Speech-to-text service initialized in ${stopwatch.elapsedMilliseconds}ms',
+        );
       } else {
         AppLogger.warning('Speech-to-text service not available');
       }
@@ -81,12 +84,16 @@ class VoiceService implements IVoiceService {
     try {
       // Ensure service is initialized
       if (!_speechToText.isAvailable) {
-        AppLogger.info('VoiceService not available, attempting initialization before listening');
+        AppLogger.info(
+          'VoiceService not available, attempting initialization before listening',
+        );
         await initialize();
       }
 
       if (!_speechToText.isAvailable) {
-        AppLogger.warning('VoiceService still not available after initialization attempt');
+        AppLogger.warning(
+          'VoiceService still not available after initialization attempt',
+        );
         onError('Speech recognition is not available on this device');
         return;
       }
@@ -100,6 +107,7 @@ class VoiceService implements IVoiceService {
 
       _isListening = true;
       _hasResults = false;
+      _lastConfidenceLevel = 0.0;
 
       await _speechToText.listen(
         onResult: (SpeechRecognitionResult result) {
@@ -107,6 +115,8 @@ class VoiceService implements IVoiceService {
             'Voice recognized - Final: ${result.finalResult}, '
                 'Confidence: ${result.confidence}',
           );
+
+          _lastConfidenceLevel = result.confidence;
 
           // Send partial result
           if (!result.finalResult) {
@@ -254,7 +264,7 @@ class VoiceService implements IVoiceService {
   /// Get confidence level of last recognized speech (0.0 to 1.0)
   double getLastConfidenceLevel() {
     try {
-      return _speechToText.lastRecognizedWords.isNotEmpty ? 0.95 : 0.0;
+      return _lastConfidenceLevel;
     } catch (e) {
       AppLogger.error('Error getting confidence level: $e');
       return 0.0;

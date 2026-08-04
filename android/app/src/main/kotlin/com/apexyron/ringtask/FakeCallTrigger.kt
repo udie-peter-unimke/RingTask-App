@@ -14,6 +14,8 @@ object FakeCallTrigger {
 
     private const val TAG = "FakeCallTrigger"
     const val CHANNEL_ID = "fake_call_channel_v2"
+    const val INCOMING_CALL_ID = 1001
+    const val MISSED_CALL_ID = 1002
 
     // Tracks whether the channel has been created in this process lifetime.
     // Avoids the delete/recreate cycle that causes Android to rate-limit
@@ -50,11 +52,18 @@ object FakeCallTrigger {
             // ✅ Launch FakeCallActivity
             val intent = Intent(context, FakeCallActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(MainActivity.EXTRA_IS_FAKE_CALL, true)
                 putExtra(MainActivity.EXTRA_CALL_PAYLOAD, payload)
             }
-            context.startActivity(intent)
+            
+            try {
+                context.startActivity(intent)
+                Log.i(TAG, "FakeCallActivity start attempted")
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct context.startActivity(intent) failed", e)
+            }
 
             Log.i(TAG, "FakeCallTrigger fired successfully: notification posted and Activity launch attempted")
         } catch (e: Exception) {
@@ -104,7 +113,6 @@ object FakeCallTrigger {
         payload: String
     ) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notificationId = System.currentTimeMillis().toInt() and 0x7FFFFFFF
 
         // ✅ Launch FakeCallActivity directly instead of MainActivity
         val fullScreenIntent = Intent(context, FakeCallActivity::class.java).apply {
@@ -116,7 +124,7 @@ object FakeCallTrigger {
 
         val fullScreenPendingIntent = PendingIntent.getActivity(
             context,
-            notificationId,
+            INCOMING_CALL_ID,
             fullScreenIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -135,7 +143,40 @@ object FakeCallTrigger {
             .setVibrate(null)
             .build()
 
-        manager.notify(notificationId, notification)
-        Log.i(TAG, "Call notification posted: id=$notificationId caller=$callerName")
+        manager.notify(INCOMING_CALL_ID, notification)
+        Log.i(TAG, "Call notification posted: id=$INCOMING_CALL_ID caller=$callerName")
+    }
+
+    fun postMissedCallNotification(
+        context: Context,
+        callerName: String,
+        title: String
+    ) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Clicking missed call notification opens MainActivity
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            MISSED_CALL_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.launcher_icon)
+            .setContentTitle("Missed Call")
+            .setContentText("$callerName – $title")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_MISSED_CALL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        manager.notify(MISSED_CALL_ID, notification)
+        Log.i(TAG, "Missed call notification posted")
     }
 }

@@ -1,5 +1,6 @@
+// lib/blocs/loop/loop_event.dart
 import 'package:equatable/equatable.dart';
-import '../../data/models/loop_model.dart';
+import 'package:ringtask/data/models/loop_model.dart';
 
 /// Base class for all loop-related events
 abstract class LoopEvent extends Equatable {
@@ -53,6 +54,8 @@ class CreateTaskEvent extends LoopEvent {
   final String period;
   final RecurrenceType recurrence;
   final String customDaysDisplay;
+  final List<int> weekdays;
+  final DateTime? specificDate;
 
   const CreateTaskEvent({
     required this.userId,
@@ -61,6 +64,8 @@ class CreateTaskEvent extends LoopEvent {
     required this.period,
     required this.recurrence,
     required this.customDaysDisplay,
+    this.weekdays = const [],
+    this.specificDate,
   });
 
   @override
@@ -71,6 +76,8 @@ class CreateTaskEvent extends LoopEvent {
     period,
     recurrence,
     customDaysDisplay,
+    weekdays,
+    specificDate,
   ];
 }
 
@@ -85,16 +92,11 @@ class UpdateTaskEvent extends LoopEvent {
   List<Object?> get props => [userId, task];
 }
 
-/// Seed sample/default tasks if collection is empty
-class SeedSampleDataEvent extends LoopEvent {
+/// Clear all tasks (for development/testing)
+class ClearAllTasksEvent extends LoopEvent {
   final String userId;
-  const SeedSampleDataEvent(this.userId);
+  const ClearAllTasksEvent(this.userId);
 
   @override
   List<Object?> get props => [userId];
-}
-
-/// Clear all tasks (optional, for development/testing)
-class ClearAllTasksEvent extends LoopEvent {
-  const ClearAllTasksEvent();
 }

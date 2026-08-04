@@ -13,78 +13,67 @@ import 'package:ringtask/data/datasources/local/cache_manager.dart';
 import 'package:ringtask/presentation/widgets/custom_button.dart';
 import 'package:ringtask/router.dart';
 import 'package:ringtask/services/firebase/fake_call_service.dart';
+import 'package:ringtask/presentation/screens/onboarding/widgets/onboarding_page.dart';
 
 import 'package:ringtask/utils/logger.dart';
 
-enum OnboardingPermissionType { notifications, overlay }
-
-class OnboardingPageData {
-  final String title;
-  final String subtitle;
-  final String asset;
-  final bool isPermissionPage;
-  final OnboardingPermissionType? permissionType;
-
-  const OnboardingPageData({
-    required this.title,
-    required this.subtitle,
-    required this.asset,
-    this.isPermissionPage = false,
-    this.permissionType,
-  });
-}
-
 const List<OnboardingPageData> _kPages = [
   OnboardingPageData(
-    title: 'Stay Organized, Stay Ahead.',
+    titleLine1: 'Stay Organized,',
+    titleLine2: 'Stay Ahead.',
     subtitle:
-    'Manage all your tasks, deadlines, and priorities in one intelligent workspace.',
-    asset: AppAssets.onboarding1,
+        'Manage all your tasks, deadlines, and priorities in one intelligent workspace.',
+    assetPath: AppAssets.onboarding1,
   ),
   OnboardingPageData(
-    title: 'Smarter Reminders.\nStronger Results.',
+    titleLine1: 'Smarter Reminders.',
+    titleLine2: 'Stronger Results.',
     subtitle:
-    'RingTask uses intelligent virtual call reminders so you never miss what matters.',
-    asset: AppAssets.onboarding2,
+        'RingTask uses intelligent virtual call reminders so you never miss what matters.',
+    assetPath: AppAssets.onboarding2,
   ),
   OnboardingPageData(
-    title: 'Virtual Call Reminders\nYou Can\'t Ignore.',
+    titleLine1: 'Virtual Call Reminders',
+    titleLine2: 'You Can\'t Ignore.',
     subtitle:
-    'When a task is due, RingTask calls you — just like a real incoming call.',
-    asset: AppAssets.onboarding3,
+        'When a task is due, RingTask calls you — just like a real incoming call.',
+    assetPath: AppAssets.onboarding3,
   ),
   OnboardingPageData(
-    title: 'Smart Work.\nBetter Productivity.',
+    titleLine1: 'Smart Work.',
+    titleLine2: 'Better Productivity.',
     subtitle:
-    'Let RingTask handle the reminders while you focus on what truly matters.',
-    asset: AppAssets.onboarding4,
+        'Let RingTask handle the reminders while you focus on what truly matters.',
+    assetPath: AppAssets.onboarding4,
   ),
   OnboardingPageData(
-    title: 'Hear Your Tasks.\nTake Action.',
+    titleLine1: 'Hear Your Tasks.',
+    titleLine2: 'Take Action.',
     subtitle:
-    'Answer the call and listen to your task details using natural text-to-speech.',
-    asset: AppAssets.onboarding5,
+        'Answer the call and listen to your task details using natural text-to-speech.',
+    assetPath: AppAssets.onboarding5,
   ),
   OnboardingPageData(
-    title: 'Your Productivity\nPartner for Life.',
+    titleLine1: 'Your Productivity',
+    titleLine2: 'Partner for Life.',
     subtitle:
-    'From reminders to achievements, RingTask is with you at every step of your journey.',
-    asset: AppAssets.onboarding6,
+        'From reminders to achievements, RingTask is with you at every step of your journey.',
+    assetPath: AppAssets.onboarding6,
   ),
   OnboardingPageData(
-    title: 'Almost There!\nStay Notified.',
+    titleLine1: 'Almost There!',
+    titleLine2: 'Stay Notified.',
     subtitle:
-    'RingTask needs notification permission to remind you of your tasks at the right time.',
-    asset: AppAssets.onboarding2,
-    isPermissionPage: true,
+        'RingTask needs notification permission to remind you of your tasks at the right time.',
+    assetPath: AppAssets.onboarding2,
     permissionType: OnboardingPermissionType.notifications,
   ),
   OnboardingPageData(
-    title: 'Appear on Top.\nNever Miss a Call.',
+    titleLine1: 'Appear on Top.',
+    titleLine2: 'Never Miss a Call.',
     subtitle:
-    'To show the incoming call screen over other apps, RingTask needs the "Appear on Top" permission. You will be taken to system settings to enable this.',
-    asset: AppAssets.onboarding3,
-    isPermissionPage: true,
+        'To show the incoming call screen over other apps, RingTask needs the "Appear on Top" permission. You will be taken to system settings to enable this.',
+    assetPath: AppAssets.onboarding3,
     permissionType: OnboardingPermissionType.overlay,
   ),
 ];
@@ -122,7 +111,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (!mounted) return;
 
     final allAssets = [
-      ..._kPages.map((p) => p.asset),
+      ..._kPages.map((p) => p.assetPath),
     ];
 
     await Future.wait(
@@ -136,7 +125,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     AppLogger.info('✅ All onboarding assets precached');
   }
 
-  // Removed _initializeServicesInBackground, _initAlarmScheduler, 
+  // Removed _initializeServicesInBackground, _initAlarmScheduler,
   // _initFakeCallService, and _initVoiceService as they are now global.
 
   void _nextPage() {
@@ -158,8 +147,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     if (!context.mounted) return;
 
     try {
-      context.read<AuthBloc>().add(const AppStarted());
+      // Retrigger the global initialization flow so AuthBloc checks session state
+      context.read<AuthBloc>().add(AppStarted());
     } catch (e) {
+      AppLogger.error('Failed to notify AuthBloc from OnboardingScreen', error: e);
       Navigator.of(context).pushReplacementNamed(AppRouter.loginRoute);
     }
   }
@@ -207,6 +198,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               // PageView (Expanded to take available space)
                               Expanded(
                                 child: PageView.builder(
+                                  // 🔑 FIXED: Retains current page pointer across settings/theme changes
+                                  key: const PageStorageKey(
+                                      'onboarding_page_view'),
                                   controller: _pageController,
                                   itemCount: _kPages.length,
                                   onPageChanged: (index) {
@@ -215,21 +209,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                                         .read<OnboardingBloc>()
                                         .add(OnboardingPageChanged(index));
                                   },
-                                  itemBuilder: (_, index) =>
-                                      LayoutBuilder(builder: (context, constraints) {
-                                        return _OnboardingCardPage(
-                                          data: _kPages[index],
-                                          maxPageHeight: constraints.maxHeight,
-                                          onGrantPermissions: () async {
-                                            final type = _kPages[index].permissionType;
-                                            if (type == OnboardingPermissionType.notifications) {
-                                              await getIt<FakeCallService>().requestNotificationAndAlarmPermissions();
-                                            } else if (type == OnboardingPermissionType.overlay) {
-                                              await getIt<FakeCallService>().requestSystemAlertWindowPermission();
-                                            }
-                                          },
-                                        );
-                                      }),
+                                  itemBuilder: (_, index) => OnboardingPage(
+                                    data: _kPages[index],
+                                    onPermissionRequest: () async {
+                                      final type =
+                                          _kPages[index].permissionType;
+                                      if (type ==
+                                          OnboardingPermissionType
+                                              .notifications) {
+                                        await getIt<FakeCallService>()
+                                            .requestNotificationAndAlarmPermissions();
+                                      } else if (type ==
+                                          OnboardingPermissionType.overlay) {
+                                        await getIt<FakeCallService>()
+                                            .requestSystemAlertWindowPermission();
+                                      }
+                                    },
+                                  ),
                                 ),
                               ),
 
@@ -269,89 +265,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-/// Internal per-page widget adapted to the card layout
-class _OnboardingCardPage extends StatelessWidget {
-  final OnboardingPageData data;
-  final double maxPageHeight;
-  final VoidCallback? onGrantPermissions;
-
-  const _OnboardingCardPage({
-    required this.data,
-    required this.maxPageHeight,
-    this.onGrantPermissions,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Reserve about 75% of the page box for image, remaining for text
-    final imageMaxHeight = maxPageHeight * 0.75;
-
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-        child: Column(
-          children: [
-            // Image box with rounded background to look polished
-            Container(
-              height: imageMaxHeight,
-              decoration: BoxDecoration(
-                color: Color(AppAssets.backgroundColor),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              clipBehavior: Clip.hardEdge,
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Image.asset(
-                  data.asset,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => Center(
-                    child: Icon(
-                      Icons.image_outlined,
-                      size: 72,
-                      color: Colors.white
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              data.title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: Theme.of(context).textTheme.titleLarge?.color,
-                height: 1.25,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              data.subtitle,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14.5,
-                color: Colors.blueGrey,
-                height: 1.55,
-              ),
-            ),
-            if (data.isPermissionPage) ...[
-              const SizedBox(height: 24),
-              CustomButton(
-                text: 'Grant Permissions',
-                onPressed: onGrantPermissions ?? () {},
-                color: Color(AppAssets.primaryVariant),
-              ),
-            ],
-            const SizedBox(height: 12),
-          ],
-        ),
       ),
     );
   }

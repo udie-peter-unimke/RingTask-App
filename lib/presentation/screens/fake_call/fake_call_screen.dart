@@ -1,16 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
-import 'package:ringtask/blocs/fake_call/fake_call_bloc.dart';
-import 'package:ringtask/blocs/fake_call/fake_call_event.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:ringtask/router.dart';
 import 'dart:convert';
 
 class FakeCallScreen extends StatefulWidget {
   final Map<String, dynamic>? payload;
 
-  const FakeCallScreen({super.key, this.payload, required Map<String, dynamic> data});
+  const FakeCallScreen({super.key, this.payload});
 
   @override
   State<FakeCallScreen> createState() => _FakeCallScreenState();
@@ -42,6 +41,10 @@ class _FakeCallScreenState extends State<FakeCallScreen>
     if (widget.payload != null) {
       taskData = widget.payload;
     }
+
+    // Layer 1 & 3: Wake lock + Immersive mode
+    WakelockPlus.enable();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
@@ -136,15 +139,10 @@ class _FakeCallScreenState extends State<FakeCallScreen>
       _pulseController.stop();
     }
 
-    // Cancel vibration before touching audio — avoids channel contention
-    try {
-      await Vibration.cancel();
-    } catch (_) {}
-
-    // Single sequential stop — prevents native seek/reset race condition
-    try {
-      await _ringtonePlayer.stop();
-    } catch (_) {}
+    // Cancel vibration and stop audio immediately.
+    // We don't await these to prevent blocking the navigation transition.
+    Vibration.cancel().catchError((e) => debugPrint('Vibration cancel error: $e'));
+    _ringtonePlayer.stop().catchError((e) => debugPrint('Ringtone stop error: $e'));
   }
 
   Future<void> _handleAccept() async {
@@ -154,20 +152,31 @@ class _FakeCallScreenState extends State<FakeCallScreen>
     await _stopRinging();
     if (!mounted) return;
 
-    context.read<FakeCallBloc>().add(const AnswerFakeCallEvent());
-
     // Pass overlay flag so TTS screen shows the call-like UI
     final Map<String, dynamic> navArgs = Map.from(taskData ?? {});
     navArgs['isFullScreenOverlay'] = true;
 
-    // pushReplacementNamed — removes fake call screen from back stack
-    // so pressing back from TTS screen doesn't return to a stale call UI
-    Navigator.pushReplacementNamed(
-      context,
-      AppRouter.ttsRoute,
-      arguments: navArgs,
-    );
+    // Verify context is still valid right before navigation.
+    if (!mounted) return;
+
+    try {
+      // pushReplacementNamed — removes fake call screen from back stack
+      // so pressing back from TTS screen doesn't return to a stale call UI
+      // Navigate immediately for minimal latency.
+      Navigator.pushReplacementNamed(
+        context,
+        AppRouter.ttsRoute,
+        arguments: navArgs,
+      );
+    } catch (e) {
+      debugPrint('Navigation to TTS screen failed: $e');
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+    }
   }
+
+
 
   Future<void> _handleDecline() async {
     if (_isStopping) return;
@@ -175,12 +184,10 @@ class _FakeCallScreenState extends State<FakeCallScreen>
     await _stopRinging();
     if (!mounted) return;
 
-    context.read<FakeCallBloc>().add(const DeclineFakeCallEvent());
-
     // If this screen was pushed at startup by an alarm, there might be no
     // home screen behind it. Ensure we have a place to go.
-    if (Navigator.canPop(context)) {
-      Navigator.pop(context);
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     } else {
       Navigator.pushNamedAndRemoveUntil(
         context,
@@ -192,6 +199,10 @@ class _FakeCallScreenState extends State<FakeCallScreen>
 
   @override
   void dispose() {
+    // Restore system UI and release wake lock
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    WakelockPlus.disable();
+
     _pulseController.dispose();
     // _isStopping guards against double-stop if _handleAccept already ran
     if (!_isStopping) {

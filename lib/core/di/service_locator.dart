@@ -3,6 +3,7 @@ import 'package:get_it/get_it.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 
 // ===== Repositories =====
 import 'package:ringtask/repositories/task_repository.dart';
@@ -12,13 +13,18 @@ import 'package:ringtask/repositories/auth_repository.dart';
 import 'package:ringtask/repositories/fake_call_repository.dart';
 import 'package:ringtask/repositories/tts_repository.dart';
 import 'package:ringtask/repositories/voice_repository.dart';
+import 'package:ringtask/repositories/subscription/subscription_repository.dart';
+import 'package:ringtask/repositories/subscription/subscription_repository_impl.dart';
 
 // ===== Datasources (Local) =====
 import 'package:ringtask/data/datasources/local/cache_manager.dart';
 import 'package:ringtask/data/datasources/local/loop_local_datasource.dart';
+import 'package:ringtask/data/datasources/local/subscription_local_datasource.dart';
 
 import 'package:ringtask/data/datasources/remote/loop_remote_datasource.dart';
 import 'package:ringtask/data/datasources/remote/auth_remote_datasource.dart';
+import 'package:ringtask/data/datasources/remote/subscription_remote_datasource.dart';
+import 'package:ringtask/services/entitlement/entitlement_service.dart';
 
 // ===== Services =====
 import 'package:ringtask/services/firebase/fake_call_service.dart';
@@ -29,6 +35,11 @@ import 'package:ringtask/services/firebase/permission_service.dart';
 import 'package:ringtask/services/scheduler/alarm_scheduler.dart';
 import 'package:ringtask/services/sync_service.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+
+// ===== Blocs =====
+import 'package:ringtask/blocs/tts/tts_settings_bloc.dart';
+import 'package:ringtask/blocs/subscription/subscription_bloc.dart';
+import 'package:ringtask/blocs/loop/loop_bloc.dart';
 
 // ===== Utils =====
 import 'package:ringtask/utils/logger.dart';
@@ -50,7 +61,7 @@ Future<void> setupServiceLocator() async {
     _registerLocalServices();
 
     // ===== Firebase Services =====
-    _registerFirebaseClients();
+   await _registerFirebaseClients();
 
     // ===== Datasources =====
     _registerDatasources();
@@ -89,7 +100,7 @@ void _registerLocalServices() {
   AppLogger.info('✓ Local services registered');
 }
 
-void _registerFirebaseClients() {
+Future<void> _registerFirebaseClients() async {
   final firestoreService = FirestoreService(
     firestore: getIt<FirebaseFirestore>(),
   );
@@ -100,8 +111,12 @@ void _registerFirebaseClients() {
   );
   getIt.registerSingleton<FirebaseAuthService>(firebaseAuthService);
 
+  // === FIX IS HERE ===
   final voiceService = VoiceService();
+  // Register it immediately so other services can see it
   getIt.registerSingleton<VoiceService>(voiceService);
+  // Initialize in background to avoid blocking app startup
+  voiceService.initialize().catchError((e) => AppLogger.error('VoiceService init failed: $e'));
 
   final fakeCallService = FakeCallService();
   getIt.registerSingleton<FakeCallService>(fakeCallService);
@@ -123,6 +138,14 @@ void _registerDatasources() {
 
   getIt.registerSingleton<AuthRemoteDataSource>(
     AuthRemoteDataSourceImpl(getIt<FirebaseAuth>()),
+  );
+
+  getIt.registerSingleton<SubscriptionLocalDataSource>(
+    SubscriptionLocalDataSource(cacheManager: getIt<CacheManager>()),
+  );
+
+  getIt.registerSingleton<SubscriptionRemoteDataSource>(
+    SubscriptionRemoteDataSource(firestore: getIt<FirebaseFirestore>()),
   );
 
   AppLogger.info('✓ Datasources registered');
@@ -171,6 +194,43 @@ void _registerRepositories() {
   // TTS Repository
   final ttsRepository = TtsRepository(FlutterTts());
   getIt.registerSingleton<TtsRepository>(ttsRepository);
+  getIt.registerLazySingleton<TtsSettingsBloc>(
+        () => TtsSettingsBloc(
+      settingsRepository: getIt<SettingsRepository>(),
+      ttsRepository: getIt<TtsRepository>(),
+    ),
+  );
+
+  // Subscription Repository
+  getIt.registerLazySingleton<SubscriptionRepository>(
+    () => SubscriptionRepositoryImpl(
+      remoteDataSource: getIt<SubscriptionRemoteDataSource>(),
+      localDataSource: getIt<SubscriptionLocalDataSource>(),
+    ),
+  );
+
+  // Entitlement Service
+  getIt.registerLazySingleton<EntitlementService>(
+    () => EntitlementService(subscriptionRepository: getIt<SubscriptionRepository>()),
+  );
+
+  // Subscription Bloc
+  getIt.registerFactory<SubscriptionBloc>(
+    () => SubscriptionBloc(
+      repository: getIt<SubscriptionRepository>(),
+      entitlementService: getIt<EntitlementService>(),
+    ),
+  );
+  
+  // Loop Bloc
+  getIt.registerFactory<LoopBloc>(
+    () => LoopBloc(
+      repository: getIt<LoopRepository>(),
+      fakeCallService: getIt<FakeCallService>(),
+      entitlementService: getIt<EntitlementService>(),
+      settingsRepository: getIt<SettingsRepository>(),
+    ),
+  );
 
   AppLogger.info('✓ Repositories registered');
 }
@@ -190,7 +250,8 @@ Future<void> _registerSchedulerAndSyncServices() async {
 
   // Initialize FakeCallService (already registered as singleton)
   final fakeCallService = getIt<FakeCallService>();
-  await fakeCallService.initialize();
+  // We don't await this so Flutter engine can signal 'ready' to native ASAP
+  fakeCallService.initialize().catchError((e) => AppLogger.error('FakeCallService init failed: $e'));
 
   AppLogger.info('✓ Scheduler and Sync services registered');
 }

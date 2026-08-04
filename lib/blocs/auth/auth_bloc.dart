@@ -2,6 +2,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:ringtask/repositories/auth_repository.dart';
 import 'package:ringtask/core/di/service_locator.dart'; // Required for getIt
 import 'package:ringtask/data/datasources/local/cache_manager.dart'; // Required for cache check
+import 'package:ringtask/services/entitlement/entitlement_service.dart';
 import 'package:ringtask/utils/logger.dart';
 import 'auth_event.dart';
 import 'auth_state.dart';
@@ -26,8 +27,12 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       Emitter<AuthState> emit,
       ) async {
     try {
+      // 1. Explicitly ensure loading state is active during initialization
+      emit(AuthLoading());
+
       AppLogger.info('AuthBloc: Initializing app startup check...');
-      // 1. Intercept startup to check onboarding completion status first
+
+      // 2. Intercept startup to check onboarding completion status first
       final cacheManager = getIt<CacheManager>();
       final hasSeenOnboarding = await cacheManager.hasSeenOnboarding();
       AppLogger.info('AuthBloc: Onboarding seen status: $hasSeenOnboarding');
@@ -38,27 +43,47 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         return; // Stop execution here so user gets guided to OnboardingScreen
       }
 
-      // 2. Existing authentication verification logic continues untouched
+      // 3. Authentication verification logic
       final isLoggedIn = await authRepository.isUserLoggedIn();
       AppLogger.info('AuthBloc: User logged in: $isLoggedIn');
 
       if (isLoggedIn) {
-        final user = await authRepository.getCurrentUser();
-        if (user != null) {
-          AppLogger.info('AuthBloc: Emitting AuthSuccess for ${user.id}');
-          emit(AuthSuccess(
-            uid: user.id,
-            name: user.displayName,
-            email: user.email,
+        try {
+          final user = await authRepository.getCurrentUser();
+          if (user != null) {
+            // Initialize EntitlementService on startup
+            await getIt<EntitlementService>().initialize(user.id);
+
+            AppLogger.info('AuthBloc: Emitting AuthSuccess for ${user.id}');
+            emit(AuthSuccess(
+              uid: user.id,
+              name: user.displayName,
+              email: user.email,
+            ));
+            return;
+          }
+        } catch (innerError, innerStack) {
+          // Network error or timeout occurred during profile fetch, but user is authenticated locally
+          AppLogger.warning(
+              'AuthBloc: Profile fetch failed during startup, falling back to offline session data.',
+              error: innerError,
+              stackTrace: innerStack);
+
+          // Emit AuthSuccess with fallback basic configurations to prevent login loop
+          emit(const AuthSuccess(
+            uid: 'offline_cached_user', // Provide basic data safely matching your domain schema
+            name: 'RingTask User',
+            email: '',
           ));
           return;
         }
       }
+
       AppLogger.info('AuthBloc: Emitting AuthInitial (Login required)');
       emit(AuthInitial());
     } catch (e, stack) {
-      AppLogger.error('AuthBloc: Startup check failed', error: e, stackTrace: stack);
-      // Graceful fallback to initial screen state if cache or repository fails
+      AppLogger.error('AuthBloc: Critical startup check failed', error: e, stackTrace: stack);
+      // Graceful fallback to initial screen state if cache or repository fails entirely
       emit(AuthInitial());
     }
   }
@@ -68,7 +93,6 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       SignUpRequested event,
       Emitter<AuthState> emit,
       ) async {
-    // ✅ Bloc-level validation (IMPORTANT)
     if (event.password != event.confirmPassword) {
       emit(const AuthFailure(error: 'Passwords do not match'));
       return;
@@ -84,6 +108,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       );
 
       if (user != null) {
+        // Initialize EntitlementService after login/signup
+        await getIt<EntitlementService>().initialize(user.id);
+
         emit(AuthSuccess(
           uid: user.id,
           name: user.displayName,
@@ -111,6 +138,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       );
 
       if (user != null) {
+        // Initialize EntitlementService after login/signup
+        await getIt<EntitlementService>().initialize(user.id);
+
         emit(AuthSuccess(
           uid: user.id,
           name: user.displayName,
@@ -148,16 +178,39 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       final user = await authRepository.signInWithGoogle();
 
       if (user != null) {
+        // 1. Validate ID token exists implicitly via successful user return
+        // Initialize EntitlementService after successful Google Sign-In
+        await getIt<EntitlementService>().initialize(user.id);
+
         emit(AuthSuccess(
           uid: user.id,
           name: user.displayName,
           email: user.email,
         ));
       } else {
-        emit(const AuthFailure(error: 'Google Sign-In failed'));
+        // 2. Handle null safely (User explicitly closed/canceled the overlay)
+        AppLogger.info('AuthBloc: Google Sign-In canceled by user.');
+        emit(AuthInitial());
       }
-    } catch (e) {
-      emit(AuthFailure(error: e.toString()));
+    } catch (e, stack) {
+      AppLogger.error('Google Sign-In error in BLoC', error: e, stackTrace: stack);
+
+      final errorMessage = e.toString();
+
+      // 3 & 4. Auto sign-out on failure to fix the "[16] Account reauth failed" loop
+      // This forces the platform-level channel to clear internal cache states
+      if (errorMessage.contains('16') || errorMessage.contains('reauth')) {
+        AppLogger.warning('AuthBloc: API 16 loop detected. Executing proactive Google session clear...');
+        try {
+          await authRepository.logout();
+        } catch (logoutError) {
+          AppLogger.error('AuthBloc: Failed to clear session during fallback', error: logoutError);
+        }
+      }
+
+      emit(const AuthFailure(
+        error: 'Google Sign-In failed or was interrupted. Please try again.',
+      ));
     }
   }
 
@@ -183,6 +236,9 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       final user = await authRepository.getCurrentUser();
 
       if (user != null) {
+        // Initialize EntitlementService after login/signup
+        await getIt<EntitlementService>().initialize(user.id);
+
         emit(AuthSuccess(
           uid: user.id,
           name: user.displayName,

@@ -1,8 +1,12 @@
 // lib/presentation/screens/tts/tts_notification_screen.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:ringtask/core/di/service_locator.dart';
 import 'package:ringtask/blocs/tts/tts_settings_bloc.dart';
 import 'package:ringtask/blocs/tts/tts_settings_state.dart';
@@ -18,11 +22,13 @@ import 'package:ringtask/router.dart';
 class TtsNotificationScreen extends StatelessWidget {
   final Map<String, dynamic>? currentTask;
   final bool isFullScreenOverlay;
+  final bool skipAutoSpeak;
 
   const TtsNotificationScreen({
     super.key,
     this.currentTask,
     this.isFullScreenOverlay = false,
+    this.skipAutoSpeak = false,
   });
 
   @override
@@ -31,6 +37,7 @@ class TtsNotificationScreen extends StatelessWidget {
     return _TtsNotificationView(
       currentTask: currentTask,
       isFullScreenOverlay: isFullScreenOverlay,
+      skipAutoSpeak: skipAutoSpeak,
     );
   }
 }
@@ -38,10 +45,12 @@ class TtsNotificationScreen extends StatelessWidget {
 class _TtsNotificationView extends StatefulWidget {
   final Map<String, dynamic>? currentTask;
   final bool isFullScreenOverlay;
+  final bool skipAutoSpeak;
 
   const _TtsNotificationView({
     this.currentTask,
     this.isFullScreenOverlay = false,
+    this.skipAutoSpeak = false,
   });
 
   @override
@@ -50,15 +59,37 @@ class _TtsNotificationView extends StatefulWidget {
 
 class _TtsNotificationViewState extends State<_TtsNotificationView> {
   bool _isSpeaking = false;
+  bool _isDismissing = false; // NEW — guards against rapid double-tap on Dismiss
 
   @override
   void initState() {
     super.initState();
-    if (widget.isFullScreenOverlay && widget.currentTask != null) {
+    if (widget.isFullScreenOverlay) {
+      WakelockPlus.enable();
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
+    
+    if (widget.currentTask != null && !widget.skipAutoSpeak) {
+      // Use addPostFrameCallback to ensure the widget is fully built
+      // and the build scope is clean before triggering speech and setStates.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _speakNow(context);
       });
     }
+  }
+
+  @override
+  void dispose() {
+    if (widget.isFullScreenOverlay) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      WakelockPlus.disable();
+    }
+
+    // Stop any in-flight TTS so it doesn't keep talking after this screen
+    // is gone, and so FakeCallService's completion callback has nothing
+    // left to touch on this (now-disposed) state.
+    getIt<FakeCallService>().stopSpeaking();
+    super.dispose();
   }
 
   @override
@@ -165,16 +196,25 @@ class _TtsNotificationViewState extends State<_TtsNotificationView> {
                     label: "Dismiss",
                     color: Colors.red,
                     onTap: () {
+                      if (_isDismissing) return; // NEW — block re-entrant taps
+                      _isDismissing = true;
+
                       _stop(context);
                       // Ensure we don't exit to a black screen if started from alarm
-                      if (Navigator.canPop(context)) {
+                      if (Navigator.of(context).canPop()) {
                         Navigator.of(context).pop();
                       } else {
-                        Navigator.pushNamedAndRemoveUntil(
-                          context,
-                          AppRouter.homeRoute,
-                          (route) => false,
-                        );
+                        // Defer navigation to next frame to avoid "child._parent == this"
+                        // or similar rendering tree assertions during a build/dispose cycle.
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (context.mounted) {
+                            Navigator.pushNamedAndRemoveUntil(
+                              context,
+                              AppRouter.homeRoute,
+                                  (route) => false,
+                            );
+                          }
+                        });
                       }
                     },
                   ),
@@ -458,60 +498,66 @@ class _TtsNotificationViewState extends State<_TtsNotificationView> {
   // CONTROL HELPERS
   // ══════════════════════════════════════════════════════════════════════
   Future<void> _speakNow(BuildContext context) async {
-    final ttsState = context.read<TtsSettingsBloc>().state;
-    final settingsState = context.read<SettingsBloc>().state;
-
-    final settings = settingsState is SettingsLoaded
-        ? settingsState.settings
-        : settingsState is SettingsUpdateSuccess
-        ? settingsState.settings
-        : const SettingsModel();
-
-    final task = widget.currentTask;
-    if (task == null) return;
-
-    bool enableTts = true;
-    bool readTitle = true;
-    bool readDescription = true;
-
-    if (ttsState is TtsSettings) {
-      enableTts = ttsState.enableTts;
-      readTitle = ttsState.readTitle;
-      readDescription = ttsState.readDescription;
-    }
-
-    if (!enableTts) return;
-
-    // Build the text to speak
-    final parts = <String>[];
-    if (readTitle) {
-      final title = (task['title'] ?? '').toString().trim();
-      if (title.isNotEmpty) parts.add('Task: $title.');
-    }
-
-    // Add scheduled time if available
-    final scheduledTimeStr = task['scheduledTime'] as String?;
-    if (scheduledTimeStr != null) {
-      final scheduledTime = DateTime.tryParse(scheduledTimeStr);
-      if (scheduledTime != null) {
-        final use24HourFormat = settings.show24HourTime;
-        final timeFormat = use24HourFormat ? 'HH:mm' : 'h:mm a';
-        final formattedTime = DateFormat(timeFormat).format(scheduledTime);
-        parts.add('Scheduled for $formattedTime.');
-      }
-    }
-
-    if (readDescription) {
-      final desc = (task['description'] ?? '').toString().trim();
-      if (desc.isNotEmpty) parts.add(desc);
-    }
-    if (parts.isEmpty) return;
-
-    final text = parts.join('. ');
-
-    if (mounted) setState(() => _isSpeaking = true);
+    // Guard against the widget being unmounted between scheduling and
+    // execution (e.g. user dismissed before the microtask ran).
+    if (!mounted || !context.mounted) return;
 
     try {
+      final ttsState = context.read<TtsSettingsBloc>().state;
+      final settingsState = context.read<SettingsBloc>().state;
+
+      final settings = settingsState is SettingsLoaded
+          ? settingsState.settings
+          : settingsState is SettingsUpdateSuccess
+          ? settingsState.settings
+          : const SettingsModel();
+
+      final task = widget.currentTask;
+      if (task == null) return;
+
+      bool enableTts = true;
+      bool readTitle = true;
+      bool readDescription = true;
+
+      if (ttsState is TtsSettings) {
+        enableTts = ttsState.enableTts;
+        readTitle = ttsState.readTitle;
+        readDescription = ttsState.readDescription;
+      }
+
+      if (!enableTts) return;
+
+      // Build the text to speak
+      final parts = <String>[];
+      if (readTitle) {
+        final title = (task['title'] ?? '').toString().trim();
+        if (title.isNotEmpty) parts.add('Task: $title.');
+      }
+
+      // Add scheduled time if available
+      final scheduledTimeStr = task['scheduledTime'] as String?;
+      if (scheduledTimeStr != null) {
+        final scheduledTime = DateTime.tryParse(scheduledTimeStr);
+        if (scheduledTime != null) {
+          final use24HourFormat = settings.show24HourTime;
+          final timeFormat = use24HourFormat ? 'HH:mm' : 'h:mm a';
+          final formattedTime = DateFormat(timeFormat).format(scheduledTime);
+          parts.add('Scheduled for $formattedTime.');
+        }
+      }
+
+      if (readDescription) {
+        final desc = (task['description'] ?? '').toString().trim();
+        if (desc.isNotEmpty) parts.add(desc);
+      }
+      if (parts.isEmpty) return;
+
+      final text = parts.join('. ');
+
+      if (mounted) {
+        setState(() => _isSpeaking = true);
+      }
+
       // ✅ Use FakeCallService's already-initialized TTS instance.
       // Do NOT use a separate TtsService — two FlutterTts instances
       // fight for audio focus on Android and the second one silences the first.
@@ -519,7 +565,9 @@ class _TtsNotificationViewState extends State<_TtsNotificationView> {
     } catch (e) {
       AppLogger.error('Speech failed: $e');
     } finally {
-      if (mounted) setState(() => _isSpeaking = false);
+      if (mounted) {
+        setState(() => _isSpeaking = false);
+      }
     }
   }
 

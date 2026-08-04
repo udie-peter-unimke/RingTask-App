@@ -30,6 +30,7 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
     if (!_isGoogleInitialized) {
       try {
         await _googleSignIn.initialize(
+          // FIX: Swapped to the correct client_type: 3 (Web Application) Client ID
           serverClientId: '909170843494-ls8vio52f9nm4r26rc01uor70c1gersc.apps.googleusercontent.com',
         );
         _isGoogleInitialized = true;
@@ -83,11 +84,20 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
 
       await _ensureGoogleInitialized();
 
-// Start interactive authentication (non-nullable)
+      // v7+: authenticate() throws GoogleSignInException(code: canceled)
+      // instead of returning null when the user cancels.
       final GoogleSignInAccount googleUser = await _googleSignIn.authenticate();
 
       AppLogger.info('Google account selected: ${googleUser.email}');
+
+      // v7+: authentication is a synchronous getter now, no await needed.
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
+
+      if (googleAuth.idToken == null) {
+        AppLogger.error('Failed to obtain Google ID token');
+        await _googleSignIn.signOut();
+        throw Exception('Google authentication failed: no ID token');
+      }
 
       final OAuthCredential credential = GoogleAuthProvider.credential(
         idToken: googleAuth.idToken,
@@ -97,11 +107,25 @@ class AuthRemoteDataSourceImpl implements AuthRemoteDataSource {
       AppLogger.info('Google Sign-In successful: ${userCredential.user?.uid}');
       return userCredential.user;
 
+    } on GoogleSignInException catch (e, s) {
+      if (e.code == GoogleSignInExceptionCode.canceled) {
+        AppLogger.warning('Google Sign-In canceled by user');
+        return null;
+      }
+      AppLogger.error('Google Sign-In failed: ${e.code} - ${e.description}', stackTrace: s);
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
+      rethrow;
     } on FirebaseAuthException catch (e, s) {
       AppLogger.error('Firebase Google Auth failed: ${e.code} - ${e.message}', stackTrace: s);
+      await _googleSignIn.signOut();
       rethrow;
     } catch (e, s) {
       AppLogger.error('Google Sign-In failed: $e', stackTrace: s);
+      try {
+        await _googleSignIn.signOut();
+      } catch (_) {}
       rethrow;
     }
   }

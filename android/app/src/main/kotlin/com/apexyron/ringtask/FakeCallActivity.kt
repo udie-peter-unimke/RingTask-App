@@ -1,14 +1,18 @@
 package com.apexyron.ringtask
 
 import android.app.KeyguardManager
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -40,21 +44,29 @@ class FakeCallActivity : AppCompatActivity() {
     private var screenWakeLock: PowerManager.WakeLock? = null
     private var pulseAnimatorSet: AnimatorSet? = null
 
+    private val timeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val timeoutRunnable = java.lang.Runnable { handleTimeout() }
+
     // Track whether the user took a deliberate action (answer/decline).
     // If true, onPause should NOT stop the ringtone — we want it to keep
     // playing until forwardToFlutter() completes the transition.
     private var userActed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // ✅ CRITICAL: Apply flags BEFORE onCreate to ensure the window is ready
         applyScreenFlags()
         super.onCreate(savedInstanceState)
+        
+        // Also call it after super just to be safe on some versions
+        applyScreenFlags()
 
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         localWakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "ringtask:FakeCallActivity"
         )
-        localWakeLock?.acquire(30_000L)
+        // Keep CPU awake for up to 10 minutes for long alarms
+        localWakeLock?.acquire(600_000L)
 
         // Wake screen specifically
         screenWakeLock = pm.newWakeLock(
@@ -63,7 +75,8 @@ class FakeCallActivity : AppCompatActivity() {
                     PowerManager.ON_AFTER_RELEASE,
             "ringtask:FakeCallActivity:WakeScreen"
         )
-        screenWakeLock?.acquire(10_000L)
+        // Keep screen bright for up to 5 minutes
+        screenWakeLock?.acquire(300_000L)
 
         payload = intent.getStringExtra(MainActivity.EXTRA_CALL_PAYLOAD)
 
@@ -76,6 +89,8 @@ class FakeCallActivity : AppCompatActivity() {
 
         btnAnswer.setOnClickListener {
             userActed = true
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            cancelCallNotification()
             stopRingtoneAndVibration()
             forwardToFlutter(payload)
             finish()
@@ -84,12 +99,18 @@ class FakeCallActivity : AppCompatActivity() {
         // Single declaration — the duplicate is removed
         btnDecline.setOnClickListener {
             userActed = true
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            cancelCallNotification()
             stopRingtoneAndVibration()
             finish()
         }
 
         startRingtoneAndVibration()
         startPulseAnimation()
+        
+        // Start 5-minute timeout
+        timeoutHandler.postDelayed(timeoutRunnable, 300_000L)
+        
         Log.i(TAG, "FakeCallActivity created — payload=$payload")
     }
 
@@ -103,6 +124,11 @@ class FakeCallActivity : AppCompatActivity() {
         updateUi(payload)
         stopRingtoneAndVibration()
         stopPulseAnimation()
+        
+        // Reset timeout for new incoming call
+        timeoutHandler.removeCallbacks(timeoutRunnable)
+        timeoutHandler.postDelayed(timeoutRunnable, 300_000L)
+        
         startRingtoneAndVibration()
         startPulseAnimation()
     }
@@ -120,6 +146,7 @@ class FakeCallActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        timeoutHandler.removeCallbacks(timeoutRunnable)
         stopPulseAnimation()
         try {
             if (localWakeLock?.isHeld == true) {
@@ -252,11 +279,27 @@ class FakeCallActivity : AppCompatActivity() {
                 ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             }
 
+            // 🔊 Bypass Silent Mode Logic
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            
+            // Check current alarm volume. If it's too low, boost it.
+            val currentAlarmVolume = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            val maxAlarmVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            
+            if (currentAlarmVolume <= (maxAlarmVolume / 4)) {
+                Log.i(TAG, "Alarm volume is low ($currentAlarmVolume/$maxAlarmVolume). Boosting to 50%.")
+                audioManager.setStreamVolume(
+                    AudioManager.STREAM_ALARM,
+                    maxAlarmVolume / 2,
+                    0 // No UI feedback
+                )
+            }
+
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(applicationContext, ringtoneUri!!)
                 setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                        .setUsage(AudioAttributes.USAGE_ALARM)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                         .build()
                 )
@@ -264,7 +307,7 @@ class FakeCallActivity : AppCompatActivity() {
                 prepare()
                 start()
             }
-            Log.i(TAG, "MediaPlayer started with URI: $ringtoneUri")
+            Log.i(TAG, "MediaPlayer started with USAGE_ALARM and URI: $ringtoneUri")
 
             vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
@@ -274,14 +317,26 @@ class FakeCallActivity : AppCompatActivity() {
                 getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             }
 
-            vibrator?.let { v ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    v.vibrate(VibrationEffect.createWaveform(VIBRATION_PATTERN, 0))
-                } else {
-                    @Suppress("DEPRECATION")
-                    v.vibrate(VIBRATION_PATTERN, 0)
+            val vibrationEnabled = try {
+                payload?.let { p ->
+                    JSONObject(p).optBoolean("vibrationEnabled", true)
+                } ?: true
+            } catch (e: Exception) {
+                true
+            }
+
+            if (vibrationEnabled) {
+                vibrator?.let { v ->
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        v.vibrate(VibrationEffect.createWaveform(VIBRATION_PATTERN, 0))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        v.vibrate(VIBRATION_PATTERN, 0)
+                    }
+                    Log.i(TAG, "Vibration started")
                 }
-                Log.i(TAG, "Vibration started")
+            } else {
+                Log.i(TAG, "Vibration skipped (disabled in settings)")
             }
         } catch (e: Exception) {
             Log.e(TAG, "startRingtoneAndVibration failed", e)
@@ -318,15 +373,42 @@ class FakeCallActivity : AppCompatActivity() {
 
     private fun forwardToFlutter(payload: String?) {
         val mainIntent = Intent(this, MainActivity::class.java).apply {
-            // FLAG_ACTIVITY_CLEAR_TOP was the culprit — it destroyed and
-            // recreated MainActivity, causing the surface reconstruction race.
-            // SINGLE_TOP alone brings the existing instance to the front
-            // and delivers the payload via onNewIntent without rebuilding it.
+            // SINGLE_TOP brings existing MainActivity to front.
+            // FLAG_ACTIVITY_REORDER_TO_FRONT ensures it's brought to top of the stack.
+            // FLAG_ACTIVITY_NO_USER_ACTION prevents triggering onUserLeaveHint
+            // and helps with background-to-foreground transitions.
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             putExtra(MainActivity.EXTRA_CALL_PAYLOAD, payload)
             putExtra(MainActivity.EXTRA_IS_FAKE_CALL, true)
         }
         startActivity(mainIntent)
+    }
+
+    private fun handleTimeout() {
+        Log.i(TAG, "Call timed out after 5 minutes")
+        stopRingtoneAndVibration()
+        cancelCallNotification()
+
+        // Post missed call notification
+        try {
+            payload?.let { p ->
+                val json = JSONObject(p)
+                val title = json.optString("title", "Task Reminder")
+                val caller = json.optString("callerName", "RingTask Reminder")
+                FakeCallTrigger.postMissedCallNotification(this, caller, title)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post missed call notification", e)
+        }
+
+        finish()
+    }
+
+    private fun cancelCallNotification() {
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        manager.cancel(FakeCallTrigger.INCOMING_CALL_ID)
     }
 }

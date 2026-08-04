@@ -1,7 +1,9 @@
 // lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter/foundation.dart';
 import 'package:ringtask/firebase_options.dart';
 import 'package:ringtask/core/di/service_locator.dart';
 import 'package:ringtask/repositories/auth_repository.dart';
@@ -13,8 +15,10 @@ import 'package:ringtask/blocs/auth/auth_event.dart';
 import 'package:ringtask/blocs/task/task_bloc.dart';
 import 'package:ringtask/blocs/settings/settings_bloc.dart';
 import 'package:ringtask/blocs/settings/settings_event.dart';
+import 'package:ringtask/blocs/tts/tts_settings_bloc.dart';
 import 'package:ringtask/blocs/voice/voice_bloc.dart';
 import 'package:ringtask/blocs/loop/loop_bloc.dart';
+import 'package:ringtask/services/entitlement/entitlement_service.dart';
 import 'package:ringtask/utils/logger.dart';
 import 'package:ringtask/app.dart';
 
@@ -29,6 +33,15 @@ void main() async {
         options: DefaultFirebaseOptions.currentPlatform,
       );
     }
+    // Pass all uncaught "fatal" errors from the framework to Crashlytics
+    FlutterError.onError = (errorDetails) {
+      FirebaseCrashlytics.instance.recordFlutterFatalError(errorDetails);
+    };
+    // Pass all uncaught asynchronous errors that aren't handled by the Flutter framework to Crashlytics
+    PlatformDispatcher.instance.onError = (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+      return true;
+    };
   } catch (e) {
     AppLogger.error('Firebase initialization failed. Check your firebase_options.dart: $e');
   }
@@ -69,13 +82,14 @@ class RingTaskApp extends StatelessWidget {
         BlocProvider(
           create: (context) => VoiceBloc(
             voiceRepository: getIt<IVoiceRepository>(),
+            entitlementService: getIt<EntitlementService>(),
           ),
         ),
         BlocProvider(
-          create: (context) => LoopBloc(
-            repository: getIt(),
-            fakeCallService: getIt(),
-          ),
+          create: (context) => getIt<LoopBloc>(),
+        ),
+        BlocProvider(
+          create: (context) => getIt<TtsSettingsBloc>(),
         ),
       ],
       child: const MainApp(),

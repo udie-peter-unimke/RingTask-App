@@ -19,6 +19,7 @@ class CacheManager {
   static const String _lastSyncKey = 'last_sync_timestamp';
   static const String _deviceIdKey = 'device_id';
   static const String _kOnboardingSeenKey = 'onboarding_complete';
+  static const String _subscriptionStatusKey = 'subscription_status';
 
   CacheManager({required SharedPreferences prefs}) : _prefs = prefs;
 
@@ -171,6 +172,39 @@ class CacheManager {
       return await _prefs.remove(_userKey);
     } catch (e) {
       AppLogger.error('Error clearing cached user data', error: e);
+      return false;
+    }
+  }
+
+  // ============================================================================
+  // SUBSCRIPTION STATUS CACHING
+  // ============================================================================
+
+  Future<bool> cacheSubscriptionStatus(Map<String, dynamic> status) async {
+    try {
+      return await _prefs.setString(_subscriptionStatusKey, jsonEncode(status));
+    } catch (e) {
+      AppLogger.error('Error caching subscription status', error: e);
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getCachedSubscriptionStatus() async {
+    try {
+      final encoded = _prefs.getString(_subscriptionStatusKey);
+      if (encoded == null || encoded.isEmpty) return null;
+      return jsonDecode(encoded);
+    } catch (e) {
+      AppLogger.error('Error retrieving cached subscription status', error: e);
+      return null;
+    }
+  }
+
+  Future<bool> clearCachedSubscriptionStatus() async {
+    try {
+      return await _prefs.remove(_subscriptionStatusKey);
+    } catch (e) {
+      AppLogger.error('Error clearing cached subscription status', error: e);
       return false;
     }
   }

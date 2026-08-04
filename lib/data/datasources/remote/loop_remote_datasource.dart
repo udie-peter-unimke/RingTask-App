@@ -76,21 +76,6 @@ class LoopRemoteDataSource {
     }
   }
 
-  /// Batch create multiple tasks
-  Future<void> batchCreateTasks(String userId, List<TaskLoopItem> tasks) async {
-    try {
-      final batch = _firestore.batch();
-      for (final task in tasks) {
-        final docRef = _getCollection(userId).doc();
-        final taskWithId = task.copyWith(id: docRef.id);
-        batch.set(docRef, taskWithId.toMap());
-      }
-      await batch.commit();
-    } catch (e) {
-      throw RemoteDataSourceException('Failed to batch create tasks: $e');
-    }
-  }
-
   /// Clear all tasks (use with caution)
   Future<void> clearAllTasks(String userId) async {
     try {

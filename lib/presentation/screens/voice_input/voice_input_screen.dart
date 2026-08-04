@@ -44,6 +44,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
     // Reset voice state when entering
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<VoiceBloc>().add(const ResetVoiceEvent());
+      context.read<VoiceBloc>().add(const InitializeVoiceEvent());
     });
   }
 
@@ -186,7 +187,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
             } else if (state is VoiceRecognizedState) {
               final parsed = TaskParser.parseVoiceInput(state.recognizedText);
               _textController.text = parsed.title;
-              
+
               if (parsed.dateTime != null) {
                 setState(() => _selectedDateTime = parsed.dateTime);
               } else {
@@ -235,7 +236,7 @@ class _VoiceInputScreenState extends State<VoiceInputScreen>
       child: BlocBuilder<VoiceBloc, VoiceState>(
         builder: (context, voiceState) {
           final isListening = voiceState is VoiceListeningState;
-          
+
           return BlocBuilder<TaskBloc, TaskState>(
             builder: (context, taskState) {
               final isLoading = taskState is TaskOperationInProgress;
